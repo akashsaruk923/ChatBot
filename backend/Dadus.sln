@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dadus.Api", "Dadus.Api\Dadus.Api.csproj", "{A70FBBA7-3A2E-489B-A64A-7DD8A4FFA183}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dadus.Api.Tests", "..\tests\Dadus.Api.Tests\Dadus.Api.Tests.csproj", "{8068249F-EF8A-4FDD-AA45-4A24C3764E2B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A70FBBA7-3A2E-489B-A64A-7DD8A4FFA183}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A70FBBA7-3A2E-489B-A64A-7DD8A4FFA183}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A70FBBA7-3A2E-489B-A64A-7DD8A4FFA183}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A70FBBA7-3A2E-489B-A64A-7DD8A4FFA183}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8068249F-EF8A-4FDD-AA45-4A24C3764E2B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8068249F-EF8A-4FDD-AA45-4A24C3764E2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8068249F-EF8A-4FDD-AA45-4A24C3764E2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8068249F-EF8A-4FDD-AA45-4A24C3764E2B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

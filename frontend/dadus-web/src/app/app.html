@@ -1,0 +1,255 @@
+<div class="app-shell" (keydown.escape)="sidebarOpen.set(false)">
+  @if (sidebarOpen()) {
+    <button
+      class="sidebar-scrim"
+      aria-label="Close conversation menu"
+      (click)="sidebarOpen.set(false)"
+    ></button>
+  }
+  <aside
+    id="conversation-sidebar"
+    class="sidebar"
+    [class.is-open]="sidebarOpen()"
+    aria-label="Conversations"
+  >
+    <a class="brand" href="/" aria-label="DADUS AI home"
+      ><span class="brand-symbol" lang="mr">द</span
+      ><span>DADUS<span class="brand-ai">AI</span><small>A little more apulki.</small></span></a
+    >
+    <button class="new-chat" (click)="newConversation()" [disabled]="sending()">
+      <span aria-hidden="true">＋</span> New conversation
+    </button>
+    <div class="history-heading">
+      <span>YOUR CONVERSATIONS</span><span>{{ conversations().length }}</span>
+    </div>
+    <nav class="conversation-list" aria-label="Conversation history">
+      @for (conversation of conversations(); track conversation.id) {
+        <button
+          class="conversation"
+          [class.selected]="conversation.id === conversationId()"
+          [attr.aria-current]="conversation.id === conversationId() ? 'page' : null"
+          (click)="selectConversation(conversation)"
+          [disabled]="sending()"
+        >
+          <span class="conversation-icon" aria-hidden="true">▤</span
+          ><span class="conversation-title">{{ conversation.title }}</span
+          ><span class="conversation-arrow" aria-hidden="true">↗</span>
+        </button>
+      } @empty {
+        <p class="empty-history">
+          A good conversation starts with a hello. Your chats will appear here.
+        </p>
+      }
+    </nav>
+    @if (historyError()) {
+      <p class="history-error">{{ historyError() }}</p>
+    }
+    <div class="sidebar-bottom">
+      <span class="little-sun" aria-hidden="true">✳</span>
+      <p>Your space to talk.<br /><span>Marathi · Hindi · English</span></p>
+    </div>
+    <div class="local-note"><span class="status-dot"></span> Local development workspace</div>
+  </aside>
+  <main class="main-panel">
+    <header class="topbar">
+      <div class="topbar-title">
+        <button
+          class="menu-toggle icon-button"
+          [attr.aria-expanded]="sidebarOpen()"
+          aria-controls="conversation-sidebar"
+          aria-label="Toggle conversation menu"
+          (click)="sidebarOpen.set(!sidebarOpen())"
+        >
+          ☰
+        </button>
+        <div>
+          <span class="eyebrow">YOUR EVERYDAY COMPANION</span>
+          <h1>{{ currentTitle() }}</h1>
+        </div>
+      </div>
+      <div class="connection" [class.offline]="!connected()">
+        <span class="status-dot"></span
+        >{{
+          connected()
+            ? mode() === 'demo'
+              ? 'Demo mode'
+              : 'AI connected'
+            : checkingConnection()
+              ? 'Connecting…'
+              : 'API unavailable'
+        }}
+      </div>
+    </header>
+    @if (!connected() && !checkingConnection()) {
+      <div class="connection-banner" role="status">
+        <span>The API is not ready yet. Your draft will stay here.</span
+        ><button (click)="checkConnection()">Reconnect ↻</button>
+      </div>
+    }
+    @if (mode() === 'demo') {
+      <div class="demo-banner">
+        <span class="demo-tag">DEMO</span>
+        <p>
+          Try the chat flow with sample replies. Calculation and time tools still run. Connect
+          OpenAI for AI-generated responses.
+        </p>
+      </div>
+    }
+    <dadus-agent-picker
+      [agents]="agents()"
+      [selectedId]="selectedAgentId()"
+      [busy]="sending()"
+      [loading]="loadingAgents()"
+      [notice]="agentCatalogError()"
+      (agentChange)="selectAgent($event)"
+      (catalogRetry)="loadAgents()"
+      (promptSelected)="usePrompt($event)"
+    />
+    <section class="chat-space" aria-label="Chat">
+      @if (!messages().length && !loadingHistory()) {
+        <div class="welcome">
+          <div class="welcome-emblem" aria-hidden="true"><span lang="mr">द</span><i>✦</i></div>
+          <p class="welcome-kicker">A LITTLE APULKI. A FRESH PERSPECTIVE.</p>
+          <h2 lang="mr">बोल भावा! <span>काय म्हणतोस?</span></h2>
+          <p class="welcome-description">
+            A thought, a question, or just a little catch-up.<br />Talk to DADUS in the language
+            that feels like you.
+          </p>
+          <div class="language-pills" aria-label="Supported chat languages">
+            <span>मराठी</span><span>हिन्दी</span><span>English</span><span>Mix it up ↗</span>
+          </div>
+          <div class="prompt-grid" aria-label="Conversation starters">
+            <button (click)="usePrompt('आजचा दिवस थोडा busy होता. थोड्या गप्पा मारूया?')">
+              <span class="prompt-icon" aria-hidden="true">☕</span
+              ><strong>Just a little catch-up</strong><span lang="mr">आजचा दिवस कसा गेला?</span
+              ><i aria-hidden="true">↗</i>
+            </button>
+            <button (click)="usePrompt('Help me make a simple, realistic plan for tomorrow.')">
+              <span class="prompt-icon" aria-hidden="true">✳</span
+              ><strong>Make room for a fresh start</strong><span>A little plan for tomorrow</span
+              ><i aria-hidden="true">↗</i>
+            </button>
+            <button (click)="usePrompt('मुझे किसी नए विषय के बारे में आसान भाषा में समझाओ।')">
+              <span class="prompt-icon" aria-hidden="true">✦</span
+              ><strong>Follow your curiosity</strong><span lang="hi">कुछ नया सीखते हैं</span
+              ><i aria-hidden="true">↗</i>
+            </button>
+          </div>
+        </div>
+      }
+      @if (loadingHistory()) {
+        <div class="history-loading" role="status">Finding your conversation…</div>
+      }
+      <div
+        class="message-feed"
+        role="log"
+        aria-label="Messages"
+        [attr.aria-busy]="sending() || loadingHistory()"
+        aria-live="polite"
+        aria-relevant="additions"
+      >
+        @if (hasMore()) {
+          <button class="load-older" (click)="loadOlder()" [disabled]="loadingOlder() || sending()">
+            {{ loadingOlder() ? 'Loading…' : '↑ Load older messages' }}
+          </button>
+        }
+        @for (message of messages(); track message.id) {
+          <article class="message" [class.user-message]="message.role === 'user'">
+            <div class="message-avatar" aria-hidden="true">
+              {{ message.role === 'user' ? 'You' : 'द' }}
+            </div>
+            <div class="message-body">
+              <div class="message-meta">
+                <strong>{{ message.role === 'user' ? 'You' : 'DADUS' }}</strong
+                ><time [attr.datetime]="message.createdAt">{{
+                  message.createdAt | date: 'shortTime'
+                }}</time>
+              </div>
+              <p>{{ message.content }}</p>
+            </div>
+          </article>
+        }
+        @if (sending()) {
+          <div class="message typing" role="status">
+            <div class="message-avatar" aria-hidden="true">द</div>
+            <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span
+            ><span class="sr-only">DADUS is replying</span>
+          </div>
+        }
+        @if (lastRun(); as run) {
+          <section class="last-run" aria-label="Latest response details" aria-live="polite">
+            <div class="run-heading">
+              <span class="eyebrow">LATEST RESPONSE</span><strong>{{ run.agentName }}</strong
+              ><span class="run-mode">{{ run.mode === 'demo' ? 'Demo' : 'OpenAI' }}</span>
+            </div>
+            @if (run.tools.length) {
+              <ul class="tool-results">
+                @for (tool of run.tools; track $index) {
+                  <li>
+                    <strong>{{ toolLabel(tool.name) }}</strong>
+                    <p>{{ tool.summary }}</p>
+                  </li>
+                }
+              </ul>
+              <p class="run-note">
+                Tool details are shown for this response and are not saved in chat history.
+              </p>
+            } @else {
+              <p class="run-note">No tools were used for this response.</p>
+            }
+          </section>
+        }
+        <span #messageEnd></span>
+      </div>
+    </section>
+    <div class="composer-area">
+      @if (error()) {
+        <div class="error-banner" role="alert">
+          <p>{{ error() }}</p>
+          <button class="dismiss-error" (click)="error.set('')" aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
+      }
+      <form class="composer" (ngSubmit)="sendMessage()">
+        <label class="sr-only" for="message-input">Message DADUS</label>
+        <textarea
+          #composer
+          id="message-input"
+          name="message"
+          rows="2"
+          [ngModel]="draft()"
+          (ngModelChange)="draft.set($event)"
+          (keydown)="onComposerKeydown($event)"
+          [disabled]="sending() || loadingHistory()"
+          maxlength="4000"
+          placeholder="मनातलं बोल… Message DADUS"
+          aria-describedby="composer-help"
+        ></textarea>
+        <div class="composer-actions">
+          <span>Just be yourself. <span aria-hidden="true">✦</span></span>
+          <div>
+            <span class="character-count" [class.near-limit]="draft().length > 3800"
+              >{{ draft().length }}<span class="sr-only"> of 4000 characters</span></span
+            ><button
+              class="send-button"
+              type="submit"
+              [disabled]="!canSend()"
+              aria-label="Send message"
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          </div>
+        </div>
+      </form>
+      <p id="composer-help" class="composer-help">
+        <span>{{
+          mode() === 'demo'
+            ? 'Demo replies are samples, not a live AI model.'
+            : 'DADUS is an AI companion and can make mistakes.'
+        }}</span
+        ><span class="keyboard-hint">Enter to send · Shift + Enter for a new line</span>
+      </p>
+    </div>
+  </main>
+</div>

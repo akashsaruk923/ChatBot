@@ -1,0 +1,30 @@
+# Dependency and build outputs
+**/node_modules/
+**/bin/
+**/obj/
+**/dist/
+**/.angular/
+**/coverage/
+**/TestResults/
+**/__pycache__/
+*.pyc
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+**/secrets.json
+*.pfx
+*.p12
+
+# Local tools, logs, editor and operating system state
+.local/
+.logs/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
+.DS_Store
+Thumbs.db

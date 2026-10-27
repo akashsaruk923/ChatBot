@@ -1,0 +1,37 @@
+<section class="agent-panel" aria-labelledby="agent-label">
+  <div class="agent-picker">
+    <label id="agent-label" for="agent-select"
+      ><span class="eyebrow">NEXT MESSAGE</span><span>Choose your agent</span></label
+    >
+    <select
+      id="agent-select"
+      [ngModel]="selectedId()"
+      (ngModelChange)="agentChange.emit($event)"
+      [disabled]="busy() || loading()"
+      aria-describedby="agent-description agent-scope"
+    >
+      @for (agent of agents(); track agent.id) {
+        <option [value]="agent.id">{{ agent.name }}</option>
+      }
+    </select>
+    <span class="tool-capability"><span aria-hidden="true">✦</span> Read-only tools</span>
+  </div>
+  <p id="agent-description" class="agent-description">{{ selectedAgent()?.description }}</p>
+  <p id="agent-scope" class="agent-scope">
+    Applies to the next message. Your conversation history stays shared.
+  </p>
+  @if (notice()) {
+    <p class="catalog-notice" role="status">
+      {{ notice() }}
+      <button (click)="catalogRetry.emit()" [disabled]="loading()">Reload choices</button>
+    </p>
+  }
+  <div class="tool-examples">
+    <span>Try a tool:</span
+    ><button (click)="promptSelected.emit('/calculate (12+3)*2')" [disabled]="busy()">
+      /calculate (12+3)*2</button
+    ><button (click)="promptSelected.emit('/time Asia/Kolkata')" [disabled]="busy()">
+      /time Asia/Kolkata
+    </button>
+  </div>
+</section>
