@@ -175,11 +175,11 @@
                   class="read-reply"
                   type="button"
                   [disabled]="!voice.synthesisSupported || sending() || loadingHistory()"
-                  [attr.aria-pressed]="voice.speaking() && readingMessageId() === message.id"
+                  [attr.aria-pressed]="speechActive() && readingMessageId() === message.id"
                   (click)="readMessage(message)"
                 >
                   {{
-                    voice.speaking() && readingMessageId() === message.id
+                    speechActive() && readingMessageId() === message.id
                       ? '■ Stop reading'
                       : '◖ Read aloud'
                   }}
@@ -226,6 +226,18 @@
         <div class="error-banner" role="alert">
           <p>{{ error() }}</p>
           <button class="dismiss-error" (click)="error.set('')" aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
+      }
+      @if (voice.error()) {
+        <div class="error-banner voice-error" role="alert">
+          <p>{{ voice.error() }}</p>
+          <button
+            class="dismiss-error"
+            (click)="voice.error.set('')"
+            aria-label="Dismiss voice error"
+          >
             ×
           </button>
         </div>
@@ -277,7 +289,16 @@
             />
             Read replies aloud
           </label>
-          @if (voice.speaking()) {
+          <button
+            class="read-reply test-voice"
+            type="button"
+            [disabled]="!voice.synthesisSupported"
+            aria-describedby="voice-availability"
+            (click)="testVoice()"
+          >
+            Test voice
+          </button>
+          @if (speechActive()) {
             <button class="stop-reading" type="button" (click)="stopReading()">
               ■ Stop reading
             </button>
@@ -314,6 +335,7 @@
         </div>
       </form>
       <div class="voice-help" id="voice-help">
+        <p id="voice-availability" role="status">{{ voice.voiceAvailability() }}</p>
         @if (!voice.recognitionSupported) {
           <p>
             Mic dictation is unavailable in this browser. Try Chrome or Edge on localhost or HTTPS;
@@ -327,9 +349,6 @@
         }
         @if (!voice.synthesisSupported) {
           <p>Reading aloud is unavailable in this browser. Text replies still work.</p>
-        }
-        @if (voice.error()) {
-          <p class="voice-error" role="alert">{{ voice.error() }}</p>
         }
         @if (voice.status()) {
           <p class="voice-status" role="status">{{ voice.status() }}</p>

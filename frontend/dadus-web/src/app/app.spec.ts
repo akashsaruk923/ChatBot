@@ -54,6 +54,9 @@ function createVoiceMock() {
     language: signal('mr-IN'),
     listening: signal(false),
     speaking: signal(false),
+    preparingSpeech: signal(false),
+    checkingVoice: signal(false),
+    voiceAvailability: signal('A Marathi browser voice is available for testing.'),
     readReplies: signal(false),
     status: signal(''),
     error: signal(''),
@@ -64,16 +67,21 @@ function createVoiceMock() {
     setReadReplies: vi.fn(),
     readReply: vi.fn(),
     speak: vi.fn(),
+    testVoice: vi.fn(),
     stopSpeaking: vi.fn(),
     stopAll: vi.fn(),
   };
   voice.startListening.mockImplementation(() => voice.listening.set(true));
   voice.stopListening.mockImplementation(() => voice.listening.set(false));
   voice.cancelListening.mockImplementation(() => voice.listening.set(false));
-  voice.stopSpeaking.mockImplementation(() => voice.speaking.set(false));
+  voice.stopSpeaking.mockImplementation(() => {
+    voice.speaking.set(false);
+    voice.preparingSpeech.set(false);
+  });
   voice.stopAll.mockImplementation(() => {
     voice.listening.set(false);
     voice.speaking.set(false);
+    voice.preparingSpeech.set(false);
   });
   voice.setLanguage.mockImplementation((language: string) => {
     voice.stopAll();
@@ -86,6 +94,10 @@ function createVoiceMock() {
   voice.speak.mockImplementation(() => {
     voice.listening.set(false);
     voice.speaking.set(true);
+  });
+  voice.testVoice.mockImplementation(() => {
+    voice.listening.set(false);
+    voice.preparingSpeech.set(true);
   });
   return voice;
 }
@@ -762,6 +774,7 @@ describe('DADUS chat', () => {
     expect(voice.startListening).not.toHaveBeenCalled();
     expect(voice.speak).not.toHaveBeenCalled();
     expect(voice.readReply).not.toHaveBeenCalled();
+    expect(voice.testVoice).not.toHaveBeenCalled();
     expect(element.querySelector('#voice-help')?.textContent).toContain('may process audio online');
   });
 
@@ -781,6 +794,94 @@ describe('DADUS chat', () => {
     await submit();
     expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion');
     expect(voice.stopAll).toHaveBeenCalled();
+  });
+
+  it('tests browser speech explicitly without an AI request, microphone access, or changing the chat', async () => {
+    app.messages.set([answer.message]);
+    app.conversationId.set(CONVERSATION.id);
+    await compose('Keep this unsent thought');
+    (element.querySelector('.test-voice') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(voice.testVoice).toHaveBeenCalledOnce();
+    expect(voice.startListening).not.toHaveBeenCalled();
+    expect(voice.readReplies()).toBe(false);
+    expect(api.send).not.toHaveBeenCalled();
+    expect(api.history).not.toHaveBeenCalled();
+    expect(api.conversations).toHaveBeenCalledOnce();
+    expect(app.conversationId()).toBe(CONVERSATION.id);
+    expect(app.messages()).toEqual([answer.message]);
+    expect(app.draft()).toBe('Keep this unsent thought');
+    expect(element.querySelector('#voice-availability')?.textContent).toContain(
+      'Marathi browser voice',
+    );
+    expect(element.querySelector('.stop-reading')).not.toBeNull();
+    (element.querySelector('.stop-reading') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(voice.stopSpeaking).toHaveBeenCalledOnce();
+    expect(voice.preparingSpeech()).toBe(false);
+    expect(element.querySelector('.stop-reading')).toBeNull();
+  });
+
+  it('keeps Stop available while browser voices are loading, including during history loading', () => {
+    voice.preparingSpeech.set(true);
+    voice.checkingVoice.set(true);
+    voice.voiceAvailability.set('Checking browser speech voices…');
+    app.loadingHistory.set(true);
+    fixture.detectChanges();
+    expect((element.querySelector('.test-voice') as HTMLButtonElement).disabled).toBe(false);
+    const stop = element.querySelector('.stop-reading') as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    expect(element.querySelector('#voice-availability')?.textContent).toContain(
+      'Checking browser speech voices',
+    );
+    stop.click();
+    expect(voice.preparingSpeech()).toBe(false);
+  });
+
+  it.each([
+    'No Marathi speech voice is available. Choose an available voice language or install a supported voice.',
+    'The browser blocked audio playback. Press Test voice, check that this tab is unmuted, and try again.',
+  ])(
+    'shows a prominent actionable voice error without losing a typed draft: %s',
+    async (message) => {
+      await compose('हा draft जप');
+      app.messages.set([answer.message]);
+      voice.voiceAvailability.set('No Marathi browser voice is available.');
+      voice.testVoice.mockImplementation(() => voice.error.set(message));
+      (element.querySelector('.test-voice') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      const alert = element.querySelector('.composer-area > .voice-error')!;
+      expect(alert.getAttribute('role')).toBe('alert');
+      expect(alert.textContent).toContain(message);
+      expect(element.querySelector('#voice-availability')?.textContent).toContain(
+        'No Marathi browser voice',
+      );
+      expect(element.querySelector('#voice-help .voice-error')).toBeNull();
+      expect(app.draft()).toBe('हा draft जप');
+      expect(app.messages()).toEqual([answer.message]);
+      expect(api.send).not.toHaveBeenCalled();
+      (alert.querySelector('button') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(element.querySelector('.voice-error')).toBeNull();
+    },
+  );
+
+  it('allows a queued individual reply to be stopped before speech begins', () => {
+    app.messages.set([answer.message]);
+    voice.speak.mockImplementation(() => voice.preparingSpeech.set(true));
+    fixture.detectChanges();
+    const read = element.querySelector('.read-reply') as HTMLButtonElement;
+    read.click();
+    fixture.detectChanges();
+    expect(voice.speaking()).toBe(false);
+    expect(read.textContent).toContain('Stop reading');
+    expect(element.querySelector('.stop-reading')).not.toBeNull();
+    read.click();
+    fixture.detectChanges();
+    expect(voice.preparingSpeech()).toBe(false);
+    expect(read.textContent).toContain('Read aloud');
   });
 
   it('limits dictated drafts to 4,000 characters and explains truncation', async () => {
@@ -876,6 +977,7 @@ describe('DADUS chat', () => {
     expect((element.querySelector('.read-replies-toggle input') as HTMLInputElement).disabled).toBe(
       true,
     );
+    expect((element.querySelector('.test-voice') as HTMLButtonElement).disabled).toBe(true);
     expect(element.querySelector('#voice-help')?.textContent).toContain(
       'Mic dictation is unavailable',
     );

@@ -78,6 +78,7 @@ export class App implements OnInit {
   readonly historyError = signal('');
   readonly dictationNotice = signal('');
   readonly readingMessageId = signal<string | null>(null);
+  readonly speechActive = computed(() => this.voice.speaking() || this.voice.preparingSpeech());
   readonly canSend = computed(
     () =>
       !!this.draft().trim() &&
@@ -397,12 +398,17 @@ export class App implements OnInit {
 
   readMessage(message: ChatMessage): void {
     if (message.role !== 'assistant' || this.sending() || this.loadingHistory()) return;
-    if (this.voice.speaking() && this.readingMessageId() === message.id) {
+    if (this.speechActive() && this.readingMessageId() === message.id) {
       this.stopReading();
       return;
     }
     this.readingMessageId.set(message.id);
     this.voice.speak(message.content);
+  }
+
+  testVoice(): void {
+    this.readingMessageId.set(null);
+    this.voice.testVoice();
   }
 
   stopReading(): void {

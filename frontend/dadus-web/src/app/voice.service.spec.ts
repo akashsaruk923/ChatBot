@@ -36,7 +36,7 @@ class FakeUtterance {
   voice: SpeechSynthesisVoice | null = null;
   onstart: (() => void) | null = null;
   onend: (() => void) | null = null;
-  onerror: (() => void) | null = null;
+  onerror: ((event?: { error: string }) => void) | null = null;
 
   constructor(readonly text: string) {}
 }
@@ -47,19 +47,30 @@ function voice(lang: string): SpeechSynthesisVoice {
 
 describe('VoiceService', () => {
   let voices: SpeechSynthesisVoice[];
+  let voiceEvents: EventTarget;
   let synthesizer: {
     getVoices: ReturnType<typeof vi.fn>;
     speak: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    resume: ReturnType<typeof vi.fn>;
+    paused: boolean;
+    addEventListener: ReturnType<typeof vi.fn>;
+    removeEventListener: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
+    vi.useFakeTimers();
     FakeRecognition.instances = [];
     voices = [voice('en-US'), voice('mr-IN'), voice('hi-IN'), voice('en-IN')];
+    voiceEvents = new EventTarget();
     synthesizer = {
       getVoices: vi.fn(() => voices),
       speak: vi.fn(),
       cancel: vi.fn(),
+      resume: vi.fn(),
+      paused: false,
+      addEventListener: vi.fn(voiceEvents.addEventListener.bind(voiceEvents)),
+      removeEventListener: vi.fn(voiceEvents.removeEventListener.bind(voiceEvents)),
     };
     vi.stubGlobal('SpeechRecognition', FakeRecognition);
     vi.stubGlobal('webkitSpeechRecognition', undefined);
@@ -70,6 +81,7 @@ describe('VoiceService', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -202,6 +214,9 @@ describe('VoiceService', () => {
     api.readReply('Hello!');
     expect(spoken().text).toBe('Hello!');
     expect(spoken().voice?.lang).toBe('en-IN');
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(true);
+    spoken().onstart?.();
     expect(api.speaking()).toBe(true);
     spoken().onend?.();
     expect(api.speaking()).toBe(false);
@@ -222,6 +237,7 @@ describe('VoiceService', () => {
     api.setLanguage('en-IN');
     api.speak('Hello');
     expect(spoken().voice?.lang).toBe('en-US');
+    spoken().onstart?.();
     expect(api.status()).toContain('en-US');
   });
 
@@ -234,15 +250,23 @@ describe('VoiceService', () => {
     expect(api.speaking()).toBe(false);
   });
 
-  it('reports when browser voices have not loaded yet', () => {
+  it('waits for delayed browser voices and starts the current explicit read once loaded', () => {
     voices = [];
     const api = service();
     api.speak('नमस्कार');
-    expect(api.error()).toContain('voices are still loading');
+    expect(api.error()).toBe('');
+    expect(api.preparingSpeech()).toBe(true);
+    expect(api.checkingVoice()).toBe(true);
+    expect(api.voiceAvailability()).toContain('Loading');
     expect(synthesizer.speak).not.toHaveBeenCalled();
     voices = [voice('mr-IN')];
-    api.speak('नमस्कार');
+    voiceEvents.dispatchEvent(new Event('voiceschanged'));
     expect(synthesizer.speak).toHaveBeenCalledOnce();
+    expect(spoken().text).toBe('नमस्कार');
+    expect(api.checkingVoice()).toBe(false);
+    expect(api.voiceAvailability()).toContain('mr-IN');
+    spoken().onstart?.();
+    expect(api.speaking()).toBe(true);
   });
 
   it('turns off automatic reading and cancels playback without accepting late events', () => {
@@ -309,6 +333,7 @@ describe('VoiceService', () => {
     expect(api.error()).toContain('audio settings');
     api.speak('नमस्कार');
     expect(api.error()).toBe('');
+    spoken().onstart?.();
     expect(api.speaking()).toBe(true);
   });
 
@@ -349,5 +374,183 @@ describe('VoiceService', () => {
     expect(api.speaking()).toBe(false);
     expect(api.error()).toBe('');
     expect(api.status()).toBe('');
+  });
+
+  it('plays an explicit test sample in the selected language without opting into replies', () => {
+    const api = service();
+    api.setLanguage('en-IN');
+    api.testVoice();
+    expect(spoken().text).toContain('Can you hear my voice');
+    expect(spoken().voice?.lang).toBe('en-IN');
+    expect(api.readReplies()).toBe(false);
+    expect(FakeRecognition.instances).toHaveLength(0);
+  });
+
+  it('shows selected voice availability independently of chat or playback', () => {
+    const api = service();
+    expect(api.voiceAvailability()).toContain('Marathi voice available');
+    voices = [voice('en-US')];
+    voiceEvents.dispatchEvent(new Event('voiceschanged'));
+    expect(api.voiceAvailability()).toContain('No Marathi speech voice');
+    api.setLanguage('en-IN');
+    expect(api.voiceAvailability()).toContain('en-US');
+    expect(synthesizer.speak).not.toHaveBeenCalled();
+  });
+
+  it('uses a bounded voice discovery timeout instead of waiting forever', () => {
+    voices = [];
+    const api = service();
+    api.testVoice();
+    vi.advanceTimersByTime(1999);
+    expect(api.preparingSpeech()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(api.checkingVoice()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.speaking()).toBe(false);
+    expect(api.error()).toContain('No browser speech voices loaded');
+    expect(synthesizer.speak).not.toHaveBeenCalled();
+    voices = [voice('mr-IN')];
+    voiceEvents.dispatchEvent(new Event('voiceschanged'));
+    expect(api.voiceAvailability()).toContain('Marathi voice available');
+    expect(synthesizer.speak).not.toHaveBeenCalled();
+    api.testVoice();
+    expect(synthesizer.speak).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks voices at the discovery timeout when the browser omits voiceschanged', () => {
+    voices = [];
+    const api = service();
+    api.speak('नमस्कार');
+    voices = [voice('mr-IN')];
+    vi.advanceTimersByTime(2000);
+    expect(synthesizer.speak).toHaveBeenCalledOnce();
+    expect(api.error()).toBe('');
+    expect(api.preparingSpeech()).toBe(true);
+    expect(api.speaking()).toBe(false);
+  });
+
+  it.each(['stop', 'language', 'destroy'])('cancels pending voice discovery on %s', (action) => {
+    voices = [];
+    const api = service();
+    api.speak('नमस्कार');
+    if (action === 'stop') api.stopAll();
+    if (action === 'language') api.setLanguage('en-IN');
+    if (action === 'destroy') TestBed.resetTestingModule();
+    voices = [voice('mr-IN'), voice('en-IN')];
+    voiceEvents.dispatchEvent(new Event('voiceschanged'));
+    vi.advanceTimersByTime(10000);
+    expect(synthesizer.speak).not.toHaveBeenCalled();
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.error()).toBe('');
+    if (action === 'destroy') expect(synthesizer.removeEventListener).toHaveBeenCalledOnce();
+  });
+
+  it('starts only the newest reply after delayed voice discovery', () => {
+    voices = [];
+    const api = service();
+    api.speak('old reply');
+    api.speak('new reply');
+    voices = [voice('mr-IN')];
+    voiceEvents.dispatchEvent(new Event('voiceschanged'));
+    expect(synthesizer.speak).toHaveBeenCalledOnce();
+    expect(spoken().text).toBe('new reply');
+  });
+
+  it('does not claim speech started when the browser silently ignores playback', () => {
+    const api = service();
+    api.testVoice();
+    const lateStart = spoken().onstart;
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(true);
+    expect(api.status()).toContain('Starting');
+    vi.advanceTimersByTime(8000);
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.status()).toBe('');
+    expect(api.error()).toContain('Audio did not start');
+    expect(synthesizer.cancel).toHaveBeenCalledOnce();
+    lateStart?.();
+    expect(api.speaking()).toBe(false);
+  });
+
+  it('clears the playback start deadline when the browser confirms speech started', () => {
+    const api = service();
+    api.speak('नमस्कार');
+    spoken().onstart?.();
+    vi.advanceTimersByTime(8000);
+    expect(api.speaking()).toBe(true);
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.error()).toBe('');
+    expect(synthesizer.cancel).not.toHaveBeenCalled();
+  });
+
+  it('cancels a queued playback start and suppresses its timeout after stop', () => {
+    const api = service();
+    api.speak('नमस्कार');
+    api.stopSpeaking();
+    vi.advanceTimersByTime(8000);
+    expect(api.error()).toBe('');
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.speaking()).toBe(false);
+  });
+
+  it('resumes a paused speech engine before queuing audio', () => {
+    synthesizer.paused = true;
+    service().testVoice();
+    expect(synthesizer.resume).toHaveBeenCalledOnce();
+    expect(synthesizer.resume.mock.invocationCallOrder[0]).toBeLessThan(
+      synthesizer.speak.mock.invocationCallOrder[0],
+    );
+  });
+
+  it.each([
+    ['not-allowed', 'blocked audio playback'],
+    ['audio-hardware', 'speaker or headphone'],
+    ['network', 'internet connection'],
+    ['voice-unavailable', 'available voice'],
+  ])('explains speech synthesis error %s without losing text chat', (code, expected) => {
+    const api = service();
+    api.testVoice();
+    spoken().onerror?.({ error: code });
+    expect(api.error()).toContain(expected);
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
+    vi.advanceTimersByTime(8000);
+    expect(api.error()).toContain(expected);
+  });
+
+  it('reads long Unicode replies as short sequential utterances without dropping text', () => {
+    const api = service();
+    const text = 'नमस्कार 😀 मित्रा. '.repeat(80).trim();
+    api.speak(text);
+    expect(synthesizer.speak).toHaveBeenCalledOnce();
+    const parts: string[] = [];
+    for (let index = 0; index < 100; index++) {
+      const current = spoken();
+      parts.push(current.text);
+      expect(Array.from(current.text).length).toBeLessThanOrEqual(220);
+      expect(current.text).not.toMatch(/\uD83D(?!\uDE00)|(?<!\uD83D)\uDE00/u);
+      current.onstart?.();
+      const calls = synthesizer.speak.mock.calls.length;
+      current.onend?.();
+      if (synthesizer.speak.mock.calls.length === calls) break;
+    }
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.join(' ')).toBe(text);
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
+    expect(api.status()).toContain('Finished');
+  });
+
+  it('does not queue another long-reply segment after cancellation', () => {
+    const api = service();
+    api.speak('नमस्कार मित्रा. '.repeat(80));
+    const lateEnd = spoken().onend;
+    api.stopSpeaking();
+    lateEnd?.();
+    expect(synthesizer.speak).toHaveBeenCalledOnce();
+    expect(api.speaking()).toBe(false);
+    expect(api.preparingSpeech()).toBe(false);
   });
 });

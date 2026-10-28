@@ -1,4 +1,4 @@
-import { DestroyRef, Injectable, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
 export type VoiceLanguage = 'mr-IN' | 'hi-IN' | 'en-IN';
 
@@ -34,6 +34,12 @@ interface RecognitionBrowser {
   webkitSpeechRecognition?: new () => BrowserRecognition;
 }
 
+interface SpeechRequest {
+  readonly version: number;
+  readonly text: string;
+  readonly language: VoiceLanguage;
+}
+
 @Injectable({ providedIn: 'root' })
 export class VoiceService {
   private readonly destroyRef = inject(DestroyRef);
@@ -46,6 +52,17 @@ export class VoiceService {
   private recognitionVersion = 0;
   private speechVersion = 0;
   private destroyed = false;
+  private readonly availableVoices = signal<SpeechSynthesisVoice[]>([]);
+  private voiceLoadTimer: ReturnType<typeof setTimeout> | null = null;
+  private speechStartTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingSpeech: SpeechRequest | null = null;
+  private readonly voicesChanged = () => {
+    if (this.destroyed) return;
+    if (this.refreshVoices().length) {
+      this.finishVoiceDiscovery();
+      this.playPendingSpeech();
+    }
+  };
 
   readonly recognitionSupported = typeof this.recognitionConstructor === 'function';
   readonly synthesisSupported =
@@ -58,14 +75,31 @@ export class VoiceService {
   readonly language = signal<VoiceLanguage>('mr-IN');
   readonly listening = signal(false);
   readonly speaking = signal(false);
+  readonly preparingSpeech = signal(false);
+  readonly checkingVoice = signal(false);
   readonly readReplies = signal(false);
   readonly status = signal('');
   readonly error = signal('');
+  readonly voiceAvailability = computed(() => {
+    if (!this.synthesisSupported) return 'Speech playback is not supported in this browser.';
+    const voice = this.findVoice(this.language());
+    const label = this.languageLabel(this.language());
+    if (voice) return `${label} voice available: ${voice.name} (${voice.lang}).`;
+    if (this.checkingVoice()) return 'Loading available browser speech voices…';
+    if (!this.availableVoices().length)
+      return 'No browser speech voices were found. Check Windows speech voice settings.';
+    return `No ${label} speech voice is available. Choose a language with an available voice, or check browser and Windows support for ${label} speech.`;
+  });
 
   constructor() {
+    if (this.synthesisSupported) {
+      this.synthesis.addEventListener('voiceschanged', this.voicesChanged);
+      if (!this.refreshVoices().length) this.beginVoiceDiscovery();
+    }
     this.destroyRef.onDestroy(() => {
       this.destroyed = true;
       this.stopAll();
+      this.synthesis?.removeEventListener('voiceschanged', this.voicesChanged);
     });
   }
 
@@ -189,6 +223,15 @@ export class VoiceService {
     if (this.readReplies()) this.speak(text);
   }
 
+  testVoice(): void {
+    const samples: Record<VoiceLanguage, string> = {
+      'mr-IN': 'नमस्कार! मी दादूस आहे. माझा आवाज ऐकू येतोय का?',
+      'hi-IN': 'नमस्ते! मैं दादूस हूँ। क्या मेरी आवाज़ सुनाई दे रही है?',
+      'en-IN': 'Hello! This is DADUS. Can you hear my voice?',
+    };
+    this.speak(samples[this.language()]);
+  }
+
   speak(text: string): void {
     if (this.destroyed || !text.trim()) return;
     this.error.set('');
@@ -202,68 +245,32 @@ export class VoiceService {
 
     // Playback and microphone input never run together, avoiding speaker echo.
     this.cancelListening();
-    const language = this.language();
-    const label = this.languages.find((item) => item.value === language)?.label ?? language;
-    const voices = this.synthesis.getVoices();
-    const voice =
-      voices.find((item) => item.lang.toLowerCase() === language.toLowerCase()) ??
-      voices.find((item) => item.lang.toLowerCase().split('-')[0] === language.split('-')[0]);
-    if (!voice) {
-      this.error.set(
-        voices.length
-          ? `No ${label} speech voice is available in this browser. Install a ${label} voice in Windows, or choose another voice language.`
-          : 'Browser speech voices are still loading or unavailable. Try Read reply again, or check Windows speech voice settings.',
-      );
-      return;
-    }
-
-    const version = ++this.speechVersion;
-    const utterance = new SpeechSynthesisUtterance(text.trim());
-    utterance.lang = language;
-    utterance.voice = voice;
-    this.utterance = utterance;
-    const current = () =>
-      !this.destroyed && this.utterance === utterance && this.speechVersion === version;
-    utterance.onstart = () => {
-      if (current()) this.speaking.set(true);
+    this.pendingSpeech = {
+      version: this.speechVersion,
+      text: text.trim(),
+      language: this.language(),
     };
-    utterance.onend = () => {
-      if (!current()) return;
-      this.releaseUtterance();
-      this.status.set('Finished reading the reply.');
-    };
-    utterance.onerror = () => {
-      if (!current()) return;
-      this.releaseUtterance();
-      this.status.set('');
-      this.error.set(
-        'The browser could not read this reply. Check your speech voice and audio settings.',
-      );
-    };
-    this.speaking.set(true);
-    this.status.set(
-      voice.lang.toLowerCase() === language.toLowerCase()
-        ? 'Reading the reply…'
-        : `Reading with a ${label} voice (${voice.lang}).`,
-    );
-    try {
-      this.synthesis.speak(utterance);
-    } catch {
-      this.releaseUtterance();
-      this.status.set('');
-      this.error.set(
-        'The browser could not start speech. Check your audio settings and try again.',
-      );
+    this.preparingSpeech.set(true);
+    if (this.refreshVoices().length) {
+      this.finishVoiceDiscovery();
+      this.playPendingSpeech();
+    } else {
+      this.status.set('Loading browser speech voices…');
+      this.beginVoiceDiscovery();
     }
   }
 
   stopSpeaking(): void {
     ++this.speechVersion;
+    this.pendingSpeech = null;
+    this.clearSpeechStartTimer();
+    this.finishVoiceDiscovery();
     if (this.utterance) {
       this.releaseUtterance();
-      this.synthesis.cancel();
+      this.cancelSynthesis();
     }
     this.speaking.set(false);
+    this.preparingSpeech.set(false);
     this.status.set('');
   }
 
@@ -290,6 +297,7 @@ export class VoiceService {
   }
 
   private releaseUtterance(): void {
+    this.clearSpeechStartTimer();
     if (this.utterance) {
       this.utterance.onstart = null;
       this.utterance.onend = null;
@@ -297,6 +305,210 @@ export class VoiceService {
     }
     this.utterance = null;
     this.speaking.set(false);
+    this.preparingSpeech.set(false);
+  }
+
+  private refreshVoices(): SpeechSynthesisVoice[] {
+    let voices: SpeechSynthesisVoice[] = [];
+    try {
+      voices = this.synthesis.getVoices();
+    } catch {
+      // Some browsers expose speech synthesis before its engine is ready.
+    }
+    this.availableVoices.set(voices);
+    return voices;
+  }
+
+  private beginVoiceDiscovery(): void {
+    if (this.voiceLoadTimer !== null) return;
+    this.checkingVoice.set(true);
+    this.voiceLoadTimer = setTimeout(() => {
+      this.voiceLoadTimer = null;
+      this.checkingVoice.set(false);
+      if (this.destroyed) return;
+      this.refreshVoices();
+      this.playPendingSpeech();
+    }, 2000);
+  }
+
+  private finishVoiceDiscovery(): void {
+    if (this.voiceLoadTimer !== null) clearTimeout(this.voiceLoadTimer);
+    this.voiceLoadTimer = null;
+    this.checkingVoice.set(false);
+  }
+
+  private findVoice(language: VoiceLanguage): SpeechSynthesisVoice | undefined {
+    return (
+      this.availableVoices().find((voice) => voice.lang.toLowerCase() === language.toLowerCase()) ??
+      this.availableVoices().find(
+        (voice) => voice.lang.toLowerCase().split('-')[0] === language.split('-')[0],
+      )
+    );
+  }
+
+  private languageLabel(language: VoiceLanguage): string {
+    return this.languages.find((item) => item.value === language)?.label ?? language;
+  }
+
+  private playPendingSpeech(): void {
+    const pending = this.pendingSpeech;
+    if (!pending || this.destroyed || pending.version !== this.speechVersion) return;
+    this.pendingSpeech = null;
+    const voice = this.findVoice(pending.language);
+    if (!voice) {
+      this.preparingSpeech.set(false);
+      this.status.set('');
+      const label = this.languageLabel(pending.language);
+      this.error.set(
+        this.availableVoices().length
+          ? `No ${label} speech voice is available in this browser. Choose a language with an available voice, or check browser and Windows support for ${label} speech.`
+          : 'No browser speech voices loaded. Check Windows speech voice settings, then click Test voice to try again.',
+      );
+      return;
+    }
+
+    this.playSpeechChunk(pending, voice, this.splitSpeechText(pending.text), 0);
+  }
+
+  private playSpeechChunk(
+    pending: SpeechRequest,
+    voice: SpeechSynthesisVoice,
+    chunks: readonly string[],
+    index: number,
+  ): void {
+    if (this.destroyed || pending.version !== this.speechVersion) return;
+
+    let utterance: SpeechSynthesisUtterance;
+    try {
+      utterance = new SpeechSynthesisUtterance(chunks[index]);
+    } catch {
+      this.preparingSpeech.set(false);
+      this.status.set('');
+      this.error.set(
+        'The browser speech engine could not start. Restart the browser and try Test voice.',
+      );
+      return;
+    }
+    utterance.lang = pending.language;
+    utterance.voice = voice;
+    this.utterance = utterance;
+    const current = () =>
+      !this.destroyed && this.utterance === utterance && this.speechVersion === pending.version;
+    utterance.onstart = () => {
+      if (!current()) return;
+      this.clearSpeechStartTimer();
+      this.preparingSpeech.set(false);
+      this.speaking.set(true);
+      this.status.set(
+        voice.lang.toLowerCase() === pending.language.toLowerCase()
+          ? 'Reading the reply…'
+          : `Reading with a ${this.languageLabel(pending.language)} voice (${voice.lang}).`,
+      );
+    };
+    utterance.onend = () => {
+      if (!current()) return;
+      this.releaseUtterance();
+      if (index + 1 < chunks.length) {
+        // Queue one short utterance at a time: long utterances can stall in Chrome.
+        this.playSpeechChunk(pending, voice, chunks, index + 1);
+      } else {
+        this.status.set('Finished reading the reply.');
+      }
+    };
+    utterance.onerror = (event) => {
+      if (!current()) return;
+      this.releaseUtterance();
+      this.cancelSynthesis();
+      this.status.set('');
+      this.error.set(this.synthesisError(event?.error));
+    };
+    this.speaking.set(false);
+    this.preparingSpeech.set(true);
+    this.status.set(`Starting ${this.languageLabel(pending.language)} audio…`);
+    this.speechStartTimer = setTimeout(() => {
+      this.speechStartTimer = null;
+      if (!current()) return;
+      this.releaseUtterance();
+      this.cancelSynthesis();
+      this.status.set('');
+      this.error.set(
+        'Audio did not start. Click Test voice or Read reply directly, unmute this tab, and check Windows speaker output and volume.',
+      );
+    }, 8000);
+    try {
+      if (this.synthesis.paused) this.synthesis.resume();
+      this.synthesis.speak(utterance);
+    } catch {
+      this.releaseUtterance();
+      this.cancelSynthesis();
+      this.status.set('');
+      this.error.set(
+        'The browser could not start speech. Check your audio settings and try Test voice.',
+      );
+    }
+  }
+
+  private clearSpeechStartTimer(): void {
+    if (this.speechStartTimer !== null) clearTimeout(this.speechStartTimer);
+    this.speechStartTimer = null;
+  }
+
+  private splitSpeechText(text: string): string[] {
+    const characters = Array.from(text);
+    const chunks: string[] = [];
+    let offset = 0;
+    while (offset < characters.length) {
+      let end = Math.min(offset + 220, characters.length);
+      if (end < characters.length) {
+        let wordBoundary = -1;
+        for (let index = end - 1; index >= offset + 80; index--) {
+          if (/[.!?।\n]/u.test(characters[index])) {
+            end = index + 1;
+            wordBoundary = -1;
+            break;
+          }
+          if (wordBoundary < 0 && /\s/u.test(characters[index])) wordBoundary = index + 1;
+        }
+        if (wordBoundary >= 0) end = wordBoundary;
+      }
+      const chunk = characters.slice(offset, end).join('').trim();
+      if (chunk) chunks.push(chunk);
+      offset = end;
+    }
+    return chunks;
+  }
+
+  private cancelSynthesis(): void {
+    try {
+      this.synthesis.cancel();
+    } catch {
+      // Cleanup still clears local state if a browser engine has already stopped.
+    }
+  }
+
+  private synthesisError(code: string | undefined): string {
+    switch (code) {
+      case 'not-allowed':
+        return 'Your browser blocked audio playback. Click Test voice or Read reply directly, allow sound in site settings, and unmute this tab.';
+      case 'audio-busy':
+        return 'Audio output is busy. Check Windows speaker output and close other audio apps, then try Test voice.';
+      case 'audio-hardware':
+        return 'No working audio output was found. Check your Windows speaker or headphone output and volume.';
+      case 'network':
+        return 'The browser speech voice could not connect. Check your internet connection or install an offline speech voice.';
+      case 'synthesis-unavailable':
+        return 'The browser speech engine is unavailable. Restart the browser and check Windows speech voices.';
+      case 'language-unavailable':
+      case 'voice-unavailable':
+        return 'The selected speech voice is unavailable. Choose a language with an available voice, or check browser and Windows speech support.';
+      case 'text-too-long':
+        return 'This reply is too long for the browser speech engine. Try a shorter reply.';
+      case 'canceled':
+      case 'interrupted':
+        return 'Speech was interrupted. Click Test voice or Read reply to try again.';
+      default:
+        return 'The browser could not read this reply. Check your speech voice and audio settings, then try Test voice.';
+    }
   }
 
   private recognitionError(code: string): string {
