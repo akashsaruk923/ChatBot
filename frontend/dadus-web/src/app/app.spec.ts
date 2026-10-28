@@ -1015,6 +1015,10 @@ describe('DADUS chat', () => {
     { code: 'provider_rate_limited', expected: 'Wait a little' },
     { code: 'provider_model_unavailable', expected: 'backend model setting' },
     { code: 'provider_unavailable', expected: 'backend internet connection' },
+    { code: 'provider_dns_failed', expected: 'resolve the AI provider address' },
+    { code: 'provider_connection_failed', expected: 'connect to the AI provider' },
+    { code: 'provider_tls_failed', expected: 'TLS connection' },
+    { code: 'provider_proxy_failed', expected: 'configured proxy' },
     { code: 'provider_failed', expected: 'backend API key, model access and provider quota' },
   ])(
     'explains $code without exposing provider details or losing the draft',
@@ -1041,6 +1045,99 @@ describe('DADUS chat', () => {
       expect(error.textContent).not.toContain('private-provider-body');
       expect(element.querySelector('textarea')?.value).toBe('Please answer this');
       expect(app.messages()).toEqual([]);
+    },
+  );
+
+  it('reports invalid backend key configuration during readiness without exposing the value', async () => {
+    api.health.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 503,
+            error: {
+              status: 503,
+              title: 'Service unavailable',
+              code: 'invalid_api_key_configuration',
+              detail: 'PRIVATE_KEY_VALUE',
+            },
+          }),
+      ),
+    );
+    app.checkConnection();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.connected()).toBe(false);
+    expect(app.connectionCode()).toBe('invalid_api_key_configuration');
+    expect(element.querySelector('.connection-banner')?.textContent).toContain(
+      'key format is invalid',
+    );
+    expect(element.textContent).not.toContain('PRIVATE_KEY_VALUE');
+  });
+
+  it('retains the draft when malformed key configuration prevents sending', async () => {
+    api.send.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 503,
+            error: {
+              status: 503,
+              title: 'Service unavailable',
+              code: 'invalid_api_key_configuration',
+              detail: 'PRIVATE_KEY_VALUE',
+            },
+          }),
+      ),
+    );
+    await compose('Please keep this');
+    await submit();
+    expect(element.querySelector('.error-banner')?.textContent).toContain('key format is invalid');
+    expect(element.textContent).not.toContain('PRIVATE_KEY_VALUE');
+    expect(app.draft()).toBe('Please keep this');
+    expect(app.messages()).toEqual([]);
+  });
+
+  it.each([503, 599, '503', 400, 503.5, 'PRIVATE_UPSTREAM_DATA'])(
+    'distinguishes upstream service failure and only reflects a validated status: %s',
+    async (providerStatus) => {
+      api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'gemini' }));
+      app.checkConnection();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      api.send.mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 502,
+              error: {
+                status: 502,
+                title: 'Service unavailable',
+                code: 'provider_service_unavailable',
+                providerStatus,
+                detail: 'PRIVATE_KEY_VALUE private-provider-body',
+              },
+            }),
+        ),
+      );
+      await compose('Try a Gemini reply');
+      await submit();
+      const text = element.querySelector('.error-banner')!.textContent!;
+      expect(text).toContain('Gemini returned a service error');
+      if (
+        typeof providerStatus === 'number' &&
+        Number.isInteger(providerStatus) &&
+        providerStatus >= 500 &&
+        providerStatus <= 599
+      )
+        expect(text).toContain(`HTTP ${providerStatus}`);
+      else expect(text).not.toContain('HTTP');
+      expect(text).not.toContain('PRIVATE_KEY_VALUE');
+      expect(text).not.toContain('PRIVATE_UPSTREAM_DATA');
+      expect(text).not.toContain('private-provider-body');
+      expect(text).not.toContain('backend internet connection');
+      expect(app.draft()).toBe('Try a Gemini reply');
+      expect(app.messages()).toEqual([]);
+      expect(api.send).toHaveBeenCalledOnce();
     },
   );
 

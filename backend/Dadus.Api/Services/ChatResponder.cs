@@ -14,10 +14,11 @@ public interface IChatResponder
         new(await ReplyAsync(context, cancellationToken), []);
 }
 
-public sealed class ChatFailure(int status, string code, string safeMessage) : Exception(safeMessage)
+public sealed class ChatFailure(int status, string code, string safeMessage, int? providerStatus = null) : Exception(safeMessage)
 {
     public int Status { get; } = status;
     public string Code { get; } = code;
+    public int? ProviderStatus { get; } = providerStatus;
 }
 
 public sealed class DemoChatResponder : IChatResponder

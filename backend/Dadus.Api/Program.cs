@@ -97,8 +97,11 @@ app.UseExceptionHandler(exceptionApp => exceptionApp.Run(async context =>
     };
     if (status >= 500)
         app.Logger.LogWarning("Request failed with code {Code} ({ExceptionType}).", code, error?.GetType().Name);
+    var extensions = new Dictionary<string, object?> { ["code"] = code };
+    if (error is ChatFailure { ProviderStatus: >= 500 and <= 599 } providerFailure)
+        extensions["providerStatus"] = providerFailure.ProviderStatus;
     await Results.Problem(statusCode: status, title: status >= 500 ? "Service unavailable" : "Request rejected", detail: detail,
-        extensions: new Dictionary<string, object?> { ["code"] = code }).ExecuteAsync(context);
+        extensions: extensions).ExecuteAsync(context);
 }));
 app.UseRateLimiter();
 
@@ -116,8 +119,8 @@ app.MapGet("/api/health", async (DadusDbContext db, IChatResponder responder, Ca
         "gemini" => "DadusGemini:ApiKey",
         _ => null
     };
-    if (keySetting is not null && string.IsNullOrWhiteSpace(builder.Configuration[keySetting]))
-        throw new ChatFailure(503, "key_missing", "The selected AI provider's server API key is missing. Configure it or select Development demo mode.");
+    if (keySetting is not null)
+        _ = ProviderKeyConfiguration.Require(builder.Configuration[keySetting], responder.Mode == "gemini" ? "Gemini" : "OpenAI");
     return Results.Ok(new { status = "ok", mode = responder.Mode, database = "ready" });
 });
 

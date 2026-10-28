@@ -142,7 +142,7 @@ public sealed class GeminiResponderTests
     [InlineData(403, "provider_access_denied")]
     [InlineData(404, "provider_model_unavailable")]
     [InlineData(429, "provider_rate_limited")]
-    [InlineData(500, "provider_unavailable")]
+    [InlineData(500, "provider_service_unavailable")]
     [InlineData(400, "provider_failed")]
     public async Task GeminiErrorsUseSafeProviderSpecificGuidanceWithoutRetryOrPaidUpgradeAdvice(int status, string code)
     {
@@ -151,6 +151,7 @@ public sealed class GeminiResponderTests
         var failure = await Assert.ThrowsAsync<ChatFailure>(() => Responder(handler).ReplyAsync([new("user", "Hello")], default));
         Assert.Equal(502, failure.Status);
         Assert.Equal(code, failure.Code);
+        Assert.Equal(status >= 500 ? status : (int?)null, failure.ProviderStatus);
         Assert.Contains("Gemini", failure.Message);
         Assert.DoesNotContain("OpenAI", failure.Message);
         Assert.DoesNotContain("private-provider-extra", failure.Message);

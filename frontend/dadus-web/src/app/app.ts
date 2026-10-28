@@ -453,6 +453,12 @@ export class App implements OnInit {
                 'AI access is not configured. Configure the server API key for the selected provider, or use Development demo mode, restart the API, then reconnect.',
               code: 'key_missing',
             };
+          case 'invalid_api_key_configuration':
+            return {
+              message:
+                'The selected provider API key format is invalid. Re-enter only the key value in the backend settings, without a Bearer prefix or extra whitespace, restart the API, then reconnect.',
+              code: 'invalid_api_key_configuration',
+            };
           case 'demo_not_allowed':
             return {
               message:
@@ -482,6 +488,20 @@ export class App implements OnInit {
         typeof value['title'] === 'string' &&
         typeof value['detail'] === 'string'
       ) {
+        if (value['code'] === 'provider_service_unavailable') {
+          const provider =
+            this.mode() === 'gemini'
+              ? 'Gemini'
+              : this.mode() === 'openai'
+                ? 'OpenAI'
+                : 'AI provider';
+          const status = value['providerStatus'];
+          const statusLabel =
+            typeof status === 'number' && Number.isInteger(status) && status >= 500 && status <= 599
+              ? ` (HTTP ${status})`
+              : '';
+          return `${provider} returned a service error${statusLabel}. Please try again shortly. Your draft is still here.`;
+        }
         if (
           this.mode() === 'gemini' &&
           (value['code'] === 'provider_quota_exceeded' || value['code'] === 'provider_rate_limited')
@@ -491,6 +511,8 @@ export class App implements OnInit {
         const guidance: Record<string, string> = {
           key_missing:
             'AI access is not configured. Set the API key in the backend for the selected provider, restart it, then reconnect. Your draft is still here.',
+          invalid_api_key_configuration:
+            'The selected provider API key format is invalid. Re-enter only the key value in the backend settings, without a Bearer prefix or extra whitespace, restart the API, then retry. Your draft is still here.',
           provider_authentication_failed:
             'The AI provider rejected the backend API key. Check or replace it in the backend settings, restart the API, then retry. Your draft is still here.',
           provider_access_denied:
@@ -503,6 +525,14 @@ export class App implements OnInit {
             'The configured AI model is unavailable to this project. Check the backend model setting and project access, then retry. Your draft is still here.',
           provider_unavailable:
             'The AI provider is unavailable. Check the backend internet connection and try again shortly. Your draft is still here.',
+          provider_dns_failed:
+            'The backend could not resolve the AI provider address. Check the backend DNS settings with your network administrator, then retry. Your draft is still here.',
+          provider_connection_failed:
+            'The backend could not connect to the AI provider. Check network access for the .NET backend with your network administrator, then retry. Your draft is still here.',
+          provider_tls_failed:
+            'The backend could not verify the AI provider TLS connection. Check the PC date, time and trusted certificates with your network administrator, then retry. Your draft is still here.',
+          provider_proxy_failed:
+            'The backend could not connect through its configured proxy. Check the backend proxy settings and authentication with your network administrator, then retry. Your draft is still here.',
           provider_timeout:
             'The AI provider took too long to reply. Please retry. Your draft is still here.',
           provider_failed:

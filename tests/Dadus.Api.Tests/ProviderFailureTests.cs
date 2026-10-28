@@ -17,8 +17,8 @@ public sealed class ProviderFailureTests
     [InlineData(429, "billing_hard_limit_reached", "provider_quota_exceeded")]
     [InlineData(429, "rate_limit_exceeded", "provider_rate_limited")]
     [InlineData(429, "private-provider-diagnostic-unit-test-token", "provider_rate_limited")]
-    [InlineData(500, "insufficient_quota", "provider_unavailable")]
-    [InlineData(503, "server_error", "provider_unavailable")]
+    [InlineData(500, "insufficient_quota", "provider_service_unavailable")]
+    [InlineData(503, "server_error", "provider_service_unavailable")]
     [InlineData(400, "invalid_request_error", "provider_failed")]
     public async Task ProviderFailuresReturnSpecificSafeRecoveryCodesWithoutRetrying(int status, string providerCode, string expectedCode)
     {
@@ -37,6 +37,7 @@ public sealed class ProviderFailureTests
 
         Assert.Equal(502, failure.Status);
         Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(status >= 500 ? status : (int?)null, failure.ProviderStatus);
         Assert.Equal(1, handler.Calls);
         Assert.DoesNotContain("private-provider-diagnostic", failure.Message);
         Assert.DoesNotContain("unit-test-token", failure.Message);

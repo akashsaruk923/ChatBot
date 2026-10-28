@@ -18,9 +18,7 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = AgentCatalog.Get(agentId);
-        var key = configuration[$"{provider.ConfigurationSection}:ApiKey"];
-        if (string.IsNullOrWhiteSpace(key))
-            throw new ChatFailure(503, "key_missing", $"{provider.DisplayName} access is not configured. Configure its backend API key and restart the API.");
+        var key = ProviderKeyConfiguration.Require(configuration[$"{provider.ConfigurationSection}:ApiKey"], provider.DisplayName);
         var messages = BuildContext(agentId, context);
         var executions = new List<ToolExecution>();
         var callIds = new HashSet<string>(StringComparer.Ordinal);
@@ -92,9 +90,20 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
         {
             throw new ChatFailure(504, "provider_timeout", $"{provider.DisplayName} took too long to respond. Please try again.");
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException error)
         {
-            throw new ChatFailure(502, "provider_unavailable", $"{provider.DisplayName} is unavailable. Please try again later.");
+            throw error.HttpRequestError switch
+            {
+                HttpRequestError.NameResolutionError => new ChatFailure(502, "provider_dns_failed",
+                    $"{provider.DisplayName} host name could not be resolved. Check the backend machine's DNS and internet connection."),
+                HttpRequestError.ConnectionError => new ChatFailure(502, "provider_connection_failed",
+                    $"{provider.DisplayName} connection failed. Check the backend machine's network, firewall and proxy settings."),
+                HttpRequestError.SecureConnectionError => new ChatFailure(502, "provider_tls_failed",
+                    $"{provider.DisplayName} HTTPS certificate or TLS connection failed. Check the backend machine's clock and certificate trust."),
+                HttpRequestError.ProxyTunnelError => new ChatFailure(502, "provider_proxy_failed",
+                    $"The backend proxy could not connect to {provider.DisplayName}. Check its proxy configuration."),
+                _ => new ChatFailure(502, "provider_unavailable", $"{provider.DisplayName} is unavailable. Please try again later.")
+            };
         }
         catch (JsonException)
         {
@@ -241,7 +250,7 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
                     ? new(502, "provider_quota_exceeded", "OpenAI API quota is exhausted. Check API billing and project limits before retrying.")
                     : new(502, "provider_rate_limited", "OpenAI is rate limiting requests. Wait briefly and try again.");
             case >= 500:
-                return new(502, "provider_unavailable", $"{provider.DisplayName} is temporarily unavailable. Try again later.");
+                return new(502, "provider_service_unavailable", $"{provider.DisplayName} returned a server error. Try again shortly.", (int)response.StatusCode);
             default:
                 return new(502, "provider_failed", $"{provider.DisplayName} rejected the request. Check its backend model and API project settings, then retry.");
         }

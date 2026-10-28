@@ -104,9 +104,24 @@ Failed provider requests show fixed recovery guidance and preserve the draft:
 | `provider_quota_exceeded` | Check the selected provider's quota and project limits. For Gemini free tier, wait for allowance to reset; for OpenAI, check API billing and credits. |
 | `provider_rate_limited` | Wait before retrying; check the project's API rate limits. |
 | `provider_model_unavailable` | Check the selected provider's `DadusGemini__Model` or `DadusOpenAI__Model` against models available to its project. |
-| `provider_unavailable` | Check connectivity or retry when the provider recovers. |
+| `provider_unavailable` | Check connectivity from the .NET backend process; this is an unclassified transport failure. |
+| `invalid_api_key_configuration` | Replace a placeholder or malformed key locally. Paste only the key value; outer whitespace is trimmed, while internal whitespace, controls and non-ASCII values are rejected before a request. |
+| `provider_dns_failed` | Check the backend machine's DNS resolution with the network administrator. |
+| `provider_connection_failed` | Check whether the .NET backend can connect to the provider over HTTPS. |
+| `provider_tls_failed` | Check the PC clock and certificate trust. Keep TLS verification enabled. |
+| `provider_proxy_failed` | Check the backend's configured proxy and its authentication with the network administrator. |
+| `provider_service_unavailable` | The upstream service returned a server error. The UI shows its validated HTTP 5xx status; retry when the service recovers. |
 
 The application never displays the raw provider error body or key. These diagnostics do not validate live access without a successful real chat request.
+
+To investigate Gemini connectivity from Windows **CMD**, without sending your key:
+
+```bat
+curl.exe --max-time 10 http://127.0.0.1:5088/api/health
+curl.exe -I --connect-timeout 10 --max-time 20 https://generativelanguage.googleapis.com/
+```
+
+The Google root URL can legitimately return HTTP 404; that proves an HTTPS response, not a successful authenticated model call. A healthy local API verifies database/key configuration, not live provider access. Curl and the .NET backend can have different proxy or network behavior, and a provider HTTP 5xx is distinct from a transport failure. Key-format validation and typed transport failures produce separate safe application codes; an upstream error includes only a numeric `providerStatus` in the 500–599 range. No diagnostic includes the provider response body or key. Do not bypass certificate verification to make a request succeed.
 
 ## Microphone and spoken replies
 
