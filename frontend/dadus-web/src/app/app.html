@@ -73,7 +73,7 @@
           connected()
             ? mode() === 'demo'
               ? 'Demo mode'
-              : 'AI connected'
+              : 'OpenAI configured'
             : checkingConnection()
               ? 'Connecting…'
               : 'API unavailable'
@@ -82,7 +82,11 @@
     </header>
     @if (!connected() && !checkingConnection()) {
       <div class="connection-banner" role="status">
-        <span>The API is not ready yet. Your draft will stay here.</span
+        <span
+          >{{ connectionIssue() }}
+          @if (connectionCode()) {
+            <span class="readiness-code">({{ connectionCode() }})</span>
+          }</span
         ><button (click)="checkConnection()">Reconnect ↻</button>
       </div>
     }

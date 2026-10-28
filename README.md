@@ -83,7 +83,7 @@ Changing the selected agent applies to the next message in the current conversat
 
 ## Windows / Visual Studio 2022
 
-Install the pinned .NET 8 SDK and Node 24. Open `backend/Dadus.sln` in Visual Studio 2022 with .NET 8 support. Restore/build the solution and run `npm ci` in `frontend/dadus-web`.
+Install the pinned .NET 8 SDK and Node 24. Open `backend/Dadus.sln` in Visual Studio 2022 with .NET 8 support. Restore/build the solution and run `npm ci` in `frontend/dadus-web`. The `Dadus.Api` launch profile sets Development mode and API port 5088 for Visual Studio and ordinary `dotnet run`. The Angular client is a separate process on port 4200; running only the API does not start the chat UI.
 
 For local SQL Express, set these variables in a PowerShell window using your actual instance and database:
 
@@ -97,6 +97,26 @@ dotnet run --project backend/Dadus.Api --no-launch-profile
 ```
 
 In a second PowerShell window, run `npm start` from `frontend/dadus-web`. The Angular proxy targets API port 5088. Windows account/SQL Express permissions are prerequisites for integrated authentication. To use SQLite instead, select `Database__Provider=Sqlite`, clear an unrelated SQL Server connection string, and run the same migration/start commands in Development.
+
+### If Angular shows “API unavailable”
+
+`ECONNREFUSED 127.0.0.1:5088` in the Angular terminal means the proxy could not reach an API listener on port 5088. Keep the Angular terminal running, then start the backend in a second terminal from the repository root. After configuring your database connection as above:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+dotnet run --project backend/Dadus.Api --launch-profile Dadus.Api -- --migrate
+dotnet run --project backend/Dadus.Api --launch-profile Dadus.Api
+```
+
+The backend terminal must report port 5088 and stay open. If migrations fail, address that database error before trying the server command. To check the API from another PowerShell window:
+
+```powershell
+Invoke-RestMethod -Uri 'http://127.0.0.1:5088/api/health'
+```
+
+An HTTP 503 response is a different setup failure: its safe `detail`/`code` identifies missing provider configuration or unavailable database/schema. The client shows recovery guidance for recognized readiness codes. Check `ConnectionStrings__Dadus` and apply migrations for a storage error; configure the server key for `key_missing`, or explicitly select `Chat__Mode=Demo` in Development to test without live model access. The application does not automatically source `.env.example`.
+
+When using `--no-launch-profile`, explicitly supply `--urls http://127.0.0.1:5088` or set `ASPNETCORE_URLS` as in the complete Windows sequence above. That option skips the profile's Development/port settings.
 
 ## API and design
 

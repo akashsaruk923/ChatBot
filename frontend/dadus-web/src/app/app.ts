@@ -50,6 +50,7 @@ export class App implements OnInit {
   private pendingSequence = 0;
   private catalogVersion = 0;
   private conversationListVersion = 0;
+  private healthVersion = 0;
   readonly agents = signal<AgentDefinition[]>([COMPANION]);
   readonly selectedAgentId = signal<AgentId>('companion');
   readonly loadingAgents = signal(false);
@@ -62,6 +63,10 @@ export class App implements OnInit {
   readonly mode = signal<ChatMode | null>(null);
   readonly connected = signal(false);
   readonly checkingConnection = signal(false);
+  readonly connectionIssue = signal(
+    'The API is not ready yet. Confirm the backend is running on port 5088 and check its terminal, then reconnect. Your draft will stay here.',
+  );
+  readonly connectionCode = signal('');
   readonly sending = signal(false);
   readonly loadingHistory = signal(false);
   readonly loadingOlder = signal(false);
@@ -87,17 +92,25 @@ export class App implements OnInit {
   }
 
   checkConnection(): void {
+    const version = ++this.healthVersion;
     this.checkingConnection.set(true);
     this.api
       .health()
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (health) => {
+          if (version !== this.healthVersion) return;
+          this.connectionIssue.set('');
+          this.connectionCode.set('');
           this.connected.set(true);
           this.mode.set(health.mode);
           this.checkingConnection.set(false);
         },
-        error: () => {
+        error: (failure: HttpErrorResponse) => {
+          if (version !== this.healthVersion) return;
+          const issue = this.healthIssue(failure);
+          this.connectionIssue.set(`${issue.message} Your draft will stay here.`);
+          this.connectionCode.set(issue.code);
           this.connected.set(false);
           this.checkingConnection.set(false);
         },
@@ -292,6 +305,10 @@ export class App implements OnInit {
               } satisfies Record<AgentId, string>
             )[responseAgentId];
           this.lastRun.set({ agentName, mode: result.mode, tools: result.tools ?? [] });
+          ++this.healthVersion;
+          this.checkingConnection.set(false);
+          this.connectionIssue.set('');
+          this.connectionCode.set('');
           this.connected.set(true);
           this.sending.set(false);
           this.refreshConversations();
@@ -311,6 +328,53 @@ export class App implements OnInit {
           this.focusComposer();
         },
       });
+  }
+
+  private healthIssue(failure: HttpErrorResponse): { message: string; code: string } {
+    if (failure.status === 0) {
+      return {
+        message:
+          'Cannot reach the API on port 5088. Start the backend, confirm it is listening on port 5088, and check the frontend proxy, then reconnect.',
+        code: '',
+      };
+    }
+    const problem: unknown = failure.error;
+    // Only recognized ProblemDetails codes select fixed recovery text. Never echo
+    // response bodies, arbitrary details, stack traces, connection strings or keys.
+    if (problem && typeof problem === 'object' && !Array.isArray(problem)) {
+      const value = problem as Record<string, unknown>;
+      if (
+        value['status'] === failure.status &&
+        typeof value['title'] === 'string' &&
+        typeof value['detail'] === 'string'
+      ) {
+        switch (value['code']) {
+          case 'database_unavailable':
+            return {
+              message:
+                'The database is not ready. Start SQL Server, check the backend connection string, and run the database migrations, then reconnect.',
+              code: 'database_unavailable',
+            };
+          case 'key_missing':
+            return {
+              message:
+                'OpenAI access is not configured. Configure the server API key, or use Development demo mode, restart the API, then reconnect.',
+              code: 'key_missing',
+            };
+          case 'demo_not_allowed':
+            return {
+              message:
+                'Demo mode is available only in Development. Start the local API in Development, or configure OpenAI for this environment, then reconnect.',
+              code: 'demo_not_allowed',
+            };
+        }
+      }
+    }
+    return {
+      message:
+        'The API is not ready yet. Confirm the backend is running on port 5088 and check its terminal, then reconnect.',
+      code: '',
+    };
   }
 
   private errorMessage(failure: HttpErrorResponse, fallback: string): string {

@@ -261,7 +261,9 @@ describe('DADUS chat', () => {
     api.health.mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 0 })));
     app.checkConnection();
     fixture.detectChanges();
-    expect(element.querySelector('.connection-banner')?.textContent).toContain('API is not ready');
+    expect(element.querySelector('.connection-banner')?.textContent).toContain(
+      'Cannot reach the API on port 5088',
+    );
     (element.querySelector('.connection-banner button') as HTMLButtonElement).click();
     fixture.detectChanges();
     await fixture.whenStable();
@@ -419,5 +421,155 @@ describe('DADUS chat', () => {
     expect(app.historyError()).toBe('Conversation history could not be loaded.');
     expect(element.querySelector('.history-error')?.textContent).toContain('could not be loaded');
     expect(app.messages()).toHaveLength(2);
+  });
+  it.each([
+    { code: 'database_unavailable', expected: 'Start SQL Server' },
+    { code: 'key_missing', expected: 'Configure the server API key' },
+    { code: 'demo_not_allowed', expected: 'Start the local API in Development' },
+  ])(
+    'shows safe recovery guidance for $code while preserving the draft',
+    async ({ code, expected }) => {
+      await compose('An unsent thought');
+      api.health.mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 503,
+              error: {
+                status: 503,
+                title: 'Service unavailable',
+                code,
+                detail: 'PRIVATE_STACK_TRACE Password=do-not-display <script>private()</script>',
+              },
+            }),
+        ),
+      );
+      app.checkConnection();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      const banner = element.querySelector('.connection-banner')!;
+      expect(banner.textContent).toContain(expected);
+      expect(banner.textContent).toContain(code);
+      expect(banner.textContent).toContain('Your draft will stay here.');
+      expect(banner.textContent).not.toContain('PRIVATE_STACK_TRACE');
+      expect(banner.textContent).not.toContain('Password=');
+      expect(banner.querySelector('script')).toBeNull();
+      expect(element.querySelector('textarea')?.value).toBe('An unsent thought');
+      api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'demo' }));
+      (banner.querySelector('button') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(element.querySelector('.connection-banner')).toBeNull();
+      expect(app.connectionCode()).toBe('');
+      expect(app.draft()).toBe('An unsent thought');
+    },
+  );
+
+  it('identifies an unreachable API with the expected port without exposing the network error', async () => {
+    await compose('Keep this draft');
+    api.health.mockReturnValue(
+      throwError(
+        () => new HttpErrorResponse({ status: 0, error: { message: 'PRIVATE_NETWORK_ERROR' } }),
+      ),
+    );
+    app.checkConnection();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const banner = element.querySelector('.connection-banner')!;
+    expect(banner.textContent).toContain('Cannot reach the API on port 5088');
+    expect(banner.textContent).toContain('Start the backend');
+    expect(banner.textContent).not.toContain('PRIVATE_NETWORK_ERROR');
+    expect(banner.querySelector('a')).toBeNull();
+    expect(app.connectionCode()).toBe('');
+    expect(element.querySelector('textarea')?.value).toBe('Keep this draft');
+  });
+
+  it('uses safe fallback guidance for HTML, malformed errors, and unknown ProblemDetails', async () => {
+    await compose('A draft during setup');
+    for (const body of [
+      '<html><body>PRIVATE_SERVER_BODY</body></html>',
+      { code: 'database_unavailable', detail: 'PRIVATE_SERVER_BODY' },
+      {
+        status: 503,
+        title: 'Unexpected failure',
+        code: 'PRIVATE_SERVER_CODE',
+        detail: 'PRIVATE_SERVER_BODY',
+      },
+    ]) {
+      api.health.mockReturnValue(
+        throwError(() => new HttpErrorResponse({ status: 503, error: body })),
+      );
+      app.checkConnection();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      const banner = element.querySelector('.connection-banner')!;
+      expect(banner.textContent).toContain('Confirm the backend is running on port 5088');
+      expect(banner.textContent).not.toContain('PRIVATE_SERVER');
+      expect(banner.textContent).not.toContain('database_unavailable');
+      expect(app.connectionCode()).toBe('');
+      expect(app.draft()).toBe('A draft during setup');
+    }
+  });
+
+  it('ignores an old health failure after a newer successful readiness check', async () => {
+    const old = new Subject<{ status: string; mode: 'demo' | 'openai'; database: string }>();
+    const latest = new Subject<{ status: string; mode: 'demo' | 'openai'; database: string }>();
+    api.health.mockReturnValueOnce(old).mockReturnValueOnce(latest);
+    app.checkConnection();
+    app.checkConnection();
+    latest.next({ status: 'ok', mode: 'openai', database: 'ready' });
+    latest.complete();
+    old.error(new HttpErrorResponse({ status: 0 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.connected()).toBe(true);
+    expect(app.mode()).toBe('openai');
+    expect(app.checkingConnection()).toBe(false);
+    expect(element.querySelector('.connection-banner')).toBeNull();
+    expect(element.querySelector('.connection')?.textContent).toContain('OpenAI configured');
+  });
+
+  it('does not let an older health success hide a newer database readiness failure', async () => {
+    const old = new Subject<{ status: string; mode: 'demo' | 'openai'; database: string }>();
+    const latest = new Subject<{ status: string; mode: 'demo' | 'openai'; database: string }>();
+    api.health.mockReturnValueOnce(old).mockReturnValueOnce(latest);
+    app.checkConnection();
+    app.checkConnection();
+    latest.error(
+      new HttpErrorResponse({
+        status: 503,
+        error: {
+          status: 503,
+          title: 'Storage unavailable',
+          detail: 'The database is not ready.',
+          code: 'database_unavailable',
+        },
+      }),
+    );
+    old.next({ status: 'ok', mode: 'openai', database: 'ready' });
+    old.complete();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.connected()).toBe(false);
+    expect(app.checkingConnection()).toBe(false);
+    expect(app.connectionCode()).toBe('database_unavailable');
+    expect(element.querySelector('.connection-banner')?.textContent).toContain('Start SQL Server');
+  });
+
+  it('keeps a successful send connected when an earlier health check fails later', async () => {
+    const old = new Subject<{ status: string; mode: 'demo' | 'openai'; database: string }>();
+    api.health.mockReturnValueOnce(old);
+    app.checkConnection();
+    await compose('A successful message');
+    await submit();
+    old.error(new HttpErrorResponse({ status: 0 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.messages()).toHaveLength(2);
+    expect(app.connected()).toBe(true);
+    expect(app.mode()).toBe('demo');
+    expect(app.checkingConnection()).toBe(false);
+    expect(app.connectionCode()).toBe('');
+    expect(element.querySelector('.connection-banner')).toBeNull();
   });
 });
