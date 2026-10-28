@@ -14,12 +14,16 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
     public async Task<string> ReplyAsync(IReadOnlyList<ChatTurn> context, CancellationToken cancellationToken) =>
         (await RunAgentAsync("companion", context, cancellationToken)).Content;
 
-    public async Task<AgentReply> RunAgentAsync(string agentId, IReadOnlyList<ChatTurn> context, CancellationToken cancellationToken)
+    public Task<AgentReply> RunAgentAsync(string agentId, IReadOnlyList<ChatTurn> context, CancellationToken cancellationToken) =>
+        RunAgentAsync(agentId, context, "auto", cancellationToken);
+
+    public async Task<AgentReply> RunAgentAsync(string agentId, IReadOnlyList<ChatTurn> context, string? language, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = AgentCatalog.Get(agentId);
+        var replyLanguage = ChatLanguage.Normalize(language);
         var key = ProviderKeyConfiguration.Require(configuration[$"{provider.ConfigurationSection}:ApiKey"], provider.DisplayName);
-        var messages = BuildContext(agentId, context);
+        var messages = BuildContext(agentId, context, replyLanguage);
         var executions = new List<ToolExecution>();
         var callIds = new HashSet<string>(StringComparer.Ordinal);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -111,7 +115,7 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
         }
     }
 
-    private static List<object> BuildContext(string agentId, IReadOnlyList<ChatTurn> context)
+    private static List<object> BuildContext(string agentId, IReadOnlyList<ChatTurn> context, string language)
     {
         if (context.Any(turn => turn.Role is not ("user" or "assistant") || turn.Content is null))
             throw new ChatFailure(400, "invalid_context", "The conversation context is invalid.");
@@ -126,7 +130,7 @@ internal sealed class CompatibleChatResponder(HttpClient httpClient, IConfigurat
             selected.Add(turn);
         }
         selected.Reverse();
-        var messages = new List<object> { new { role = "system", content = AgentCatalog.Instructions(agentId) } };
+        var messages = new List<object> { new { role = "system", content = AgentCatalog.Instructions(agentId, language) } };
         messages.AddRange(selected.Select(turn => (object)new { role = turn.Role, content = turn.Content }));
         return messages;
     }

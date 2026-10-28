@@ -40,6 +40,7 @@ public sealed class GeminiApiTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var reply = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("gemini", reply.GetProperty("mode").GetString());
+        Assert.Equal("auto", reply.GetProperty("language").GetString());
         Assert.Equal("नमस्कार!", reply.GetProperty("message").GetProperty("content").GetString());
         Assert.Equal(1, transport.Calls);
 

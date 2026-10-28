@@ -123,9 +123,19 @@ curl.exe -I --connect-timeout 10 --max-time 20 https://generativelanguage.google
 
 The Google root URL can legitimately return HTTP 404; that proves an HTTPS response, not a successful authenticated model call. A healthy local API verifies database/key configuration, not live provider access. Curl and the .NET backend can have different proxy or network behavior, and a provider HTTP 5xx is distinct from a transport failure. Key-format validation and typed transport failures produce separate safe application codes; an upstream error includes only a numeric `providerStatus` in the 500–599 range. No diagnostic includes the provider response body or key. Do not bypass certificate verification to make a request succeed.
 
+## Conversation language and interface
+
+The interface uses a simple dark chat layout: conversation history and New conversation in the sidebar, an agent selector in the header, a centered message feed and a rounded composer at the bottom. DADUS keeps its own branding. Agent explanations and tool details expand when needed.
+
+The composer's **Language** selector offers **मराठी**, **हिन्दी** and **English**. It now controls the requested AI reply language as well as microphone recognition and speech output. Marathi is the initial UI selection. Changing language applies to the next message in the same conversation, so you can switch between all three without losing the earlier exchange. Selecting Marathi or Hindi requests Devanagari replies even if earlier messages were English; code, names and quoted material can retain their original text.
+
+The Companion agent's instructions favor direct, relaxed conversation, use the supplied chat context and avoid repeated greetings or canned workflows. Actual replies come from the selected live model. Tests verify language selection reaches its system prompt; they do not prove live model language quality. The API also accepts `language=auto`, which asks the model to follow the latest message, including Marathi or Hindi written in Roman letters. API callers that omit the field retain this automatic behavior.
+
+After pulling this update, **rebuild and restart the backend** before testing the new language control. Browser refresh alone can leave an older API running that ignores the language field. Use your existing backend terminal so its working SQL, provider key and model settings remain available.
+
 ## Microphone and spoken replies
 
-Choose Marathi, Hindi or English beside the composer, then use **Mic** and allow microphone access in the browser. Use **Stop dictation**, review the recognized text in the draft, and press **Send** yourself. Dictation never sends a message automatically. A recent Chrome or Edge on localhost is a useful starting point; recognition support, permissions and language availability depend on the browser and may require an internet connection. A recognition failure leaves manual text input available.
+Choose Marathi, Hindi or English with **Language** beside the composer, then use **Mic** and allow microphone access in the browser. Use **Stop dictation**, review the recognized text in the draft, and press **Send** yourself. Dictation never sends a message automatically. A recent Chrome or Edge on localhost is a useful starting point; recognition support, permissions and language availability depend on the browser and may require an internet connection. A recognition failure leaves manual text input available.
 
 Use **Test voice** first to hear a short fixed greeting in the selected language. It works independently of the API, database and AI key, leaves your draft and conversation alone, and does not enable automatic reading or open the microphone. The voice availability line names the matching voice or explains which language is unavailable. If Marathi is unavailable, try an available Hindi or English voice; installing Marathi speech is not supported by every Windows/browser combination.
 
@@ -217,7 +227,7 @@ When using `--no-launch-profile`, explicitly supply `--urls http://127.0.0.1:508
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/agents` | List supported C# agents and tools. |
-| POST | `/api/chat/message` | Send `{conversationId?, message, agentId?}` and save a completed exchange. The default agent is `companion`; the response includes `agentId` and tool summaries. |
+| POST | `/api/chat/message` | Send `{conversationId?, message, agentId?, language?}` and save a completed exchange. The default agent is `companion`; `language` accepts `auto` (default), `en`, `hi`, `mr`. The response includes the normalized language, `agentId` and tool summaries. |
 | GET | `/api/chat/conversations` | List the current anonymous session's conversations. |
 | GET | `/api/chat/history` | Read a bounded page using `conversationId`, optional `before`, and `limit`. |
 

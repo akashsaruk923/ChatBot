@@ -12,15 +12,33 @@
     [class.is-open]="sidebarOpen()"
     aria-label="Conversations"
   >
-    <a class="brand" href="/" aria-label="DADUS AI home"
-      ><span class="brand-symbol" lang="mr">द</span
-      ><span>DADUS<span class="brand-ai">AI</span><small>A little more apulki.</small></span></a
-    >
+    <div class="sidebar-heading">
+      <a class="brand" href="/" aria-label="DADUS AI home"
+        ><span class="brand-symbol" lang="mr">द</span
+        ><span>DADUS <span class="brand-ai">AI</span></span></a
+      >
+      <button
+        class="sidebar-close icon-button"
+        aria-label="Close sidebar"
+        (click)="sidebarOpen.set(false)"
+      >
+        ×
+      </button>
+    </div>
     <button class="new-chat" (click)="newConversation()" [disabled]="sending()">
-      <span aria-hidden="true">＋</span> New conversation
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+      >
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      New conversation
     </button>
     <div class="history-heading">
-      <span>YOUR CONVERSATIONS</span><span>{{ conversations().length }}</span>
+      <span>Your chats</span><span>{{ conversations().length }}</span>
     </div>
     <nav class="conversation-list" aria-label="Conversation history">
       @for (conversation of conversations(); track conversation.id) {
@@ -31,22 +49,18 @@
           (click)="selectConversation(conversation)"
           [disabled]="sending()"
         >
-          <span class="conversation-icon" aria-hidden="true">▤</span
-          ><span class="conversation-title">{{ conversation.title }}</span
-          ><span class="conversation-arrow" aria-hidden="true">↗</span>
+          <span class="conversation-title">{{ conversation.title }}</span>
         </button>
       } @empty {
-        <p class="empty-history">
-          A good conversation starts with a hello. Your chats will appear here.
-        </p>
+        <p class="empty-history">Your conversations will appear here.</p>
       }
     </nav>
     @if (historyError()) {
       <p class="history-error">{{ historyError() }}</p>
     }
     <div class="sidebar-bottom">
-      <span class="little-sun" aria-hidden="true">✳</span>
-      <p>Your space to talk.<br /><span>Marathi · Hindi · English</span></p>
+      <span class="profile-mark" aria-hidden="true">D</span>
+      <p>Your everyday companion<small>मराठी · हिन्दी · English</small></p>
     </div>
     <div class="local-note"><span class="status-dot"></span> Local development workspace</div>
   </aside>
@@ -60,12 +74,28 @@
           aria-label="Toggle conversation menu"
           (click)="sidebarOpen.set(!sidebarOpen())"
         >
-          ☰
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
         </button>
-        <div>
-          <span class="eyebrow">YOUR EVERYDAY COMPANION</span>
-          <h1>{{ currentTitle() }}</h1>
-        </div>
+        <span class="product-name">DADUS</span>
+        <dadus-agent-picker
+          [agents]="agents()"
+          [selectedId]="selectedAgentId()"
+          [busy]="sending()"
+          [loading]="loadingAgents()"
+          [notice]="agentCatalogError()"
+          (agentChange)="selectAgent($event)"
+          (catalogRetry)="loadAgents()"
+          (promptSelected)="usePrompt($event)"
+        />
+        <h1 class="sr-only">{{ currentTitle() }}</h1>
       </div>
       <div class="connection" [class.offline]="!connected()">
         <span class="status-dot"></span
@@ -93,50 +123,27 @@
     @if (mode() === 'demo') {
       <div class="demo-banner">
         <span class="demo-tag">DEMO</span>
-        <p>
-          Try the chat flow with sample replies. Calculation and time tools still run. Connect
-          Gemini or OpenAI for AI-generated responses.
-        </p>
+        <p>You're using sample replies. Connect Gemini or OpenAI for AI-generated responses.</p>
       </div>
     }
-    <dadus-agent-picker
-      [agents]="agents()"
-      [selectedId]="selectedAgentId()"
-      [busy]="sending()"
-      [loading]="loadingAgents()"
-      [notice]="agentCatalogError()"
-      (agentChange)="selectAgent($event)"
-      (catalogRetry)="loadAgents()"
-      (promptSelected)="usePrompt($event)"
-    />
-    <section class="chat-space" aria-label="Chat">
+    <section
+      class="chat-space"
+      aria-label="Chat"
+      [class.empty-chat]="!messages().length && !loadingHistory()"
+    >
       @if (!messages().length && !loadingHistory()) {
         <div class="welcome">
-          <div class="welcome-emblem" aria-hidden="true"><span lang="mr">द</span><i>✦</i></div>
-          <p class="welcome-kicker">A LITTLE APULKI. A FRESH PERSPECTIVE.</p>
-          <h2 lang="mr">बोल भावा! <span>काय म्हणतोस?</span></h2>
-          <p class="welcome-description">
-            A thought, a question, or just a little catch-up.<br />Talk to DADUS in the language
-            that feels like you.
-          </p>
-          <div class="language-pills" aria-label="Supported chat languages">
-            <span>मराठी</span><span>हिन्दी</span><span>English</span><span>Mix it up ↗</span>
-          </div>
+          <h2>{{ welcomeTitle() }}</h2>
+          <p class="welcome-description">{{ welcomeSubtitle() }}</p>
           <div class="prompt-grid" aria-label="Conversation starters">
             <button (click)="usePrompt('आजचा दिवस थोडा busy होता. थोड्या गप्पा मारूया?')">
-              <span class="prompt-icon" aria-hidden="true">☕</span
-              ><strong>Just a little catch-up</strong><span lang="mr">आजचा दिवस कसा गेला?</span
-              ><i aria-hidden="true">↗</i>
+              <span aria-hidden="true">☀</span> थोड्या गप्पा
             </button>
             <button (click)="usePrompt('Help me make a simple, realistic plan for tomorrow.')">
-              <span class="prompt-icon" aria-hidden="true">✳</span
-              ><strong>Make room for a fresh start</strong><span>A little plan for tomorrow</span
-              ><i aria-hidden="true">↗</i>
+              <span aria-hidden="true">☷</span> Plan my day
             </button>
             <button (click)="usePrompt('मुझे किसी नए विषय के बारे में आसान भाषा में समझाओ।')">
-              <span class="prompt-icon" aria-hidden="true">✦</span
-              ><strong>Follow your curiosity</strong><span lang="hi">कुछ नया सीखते हैं</span
-              ><i aria-hidden="true">↗</i>
+              <span aria-hidden="true">✧</span> कुछ नया सीखें
             </button>
           </div>
         </div>
@@ -196,11 +203,11 @@
           </div>
         }
         @if (lastRun(); as run) {
-          <section class="last-run" aria-label="Latest response details" aria-live="polite">
-            <div class="run-heading">
-              <span class="eyebrow">LATEST RESPONSE</span><strong>{{ run.agentName }}</strong
+          <details class="last-run" aria-label="Latest response details">
+            <summary class="run-heading">
+              <span>Response details</span><strong>{{ run.agentName }}</strong
               ><span class="run-mode">{{ modeLabel(run.mode) }}</span>
-            </div>
+            </summary>
             @if (run.tools.length) {
               <ul class="tool-results">
                 @for (tool of run.tools; track $index) {
@@ -216,7 +223,7 @@
             } @else {
               <p class="run-note">No tools were used for this response.</p>
             }
-          </section>
+          </details>
         }
         <span #messageEnd></span>
       </div>
@@ -243,67 +250,6 @@
         </div>
       }
       <form class="composer" (ngSubmit)="sendMessage()">
-        <div class="voice-controls" aria-label="Voice controls">
-          <button
-            class="mic-button"
-            type="button"
-            [class.listening]="voice.listening()"
-            [disabled]="!voice.recognitionSupported || sending() || loadingHistory()"
-            [attr.aria-pressed]="voice.listening()"
-            aria-describedby="voice-help"
-            (click)="toggleDictation()"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              width="17"
-              height="17"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-            >
-              <rect x="9" y="3" width="6" height="12" rx="3" />
-              <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3M8 21h8" />
-            </svg>
-            {{ voice.listening() ? 'Stop dictation' : 'Mic · Speak' }}
-          </button>
-          <label class="voice-language" for="voice-language">
-            Voice language
-            <select
-              id="voice-language"
-              [value]="voice.language()"
-              [disabled]="sending() || loadingHistory()"
-              (change)="changeVoiceLanguage($any($event.target).value)"
-            >
-              @for (language of voice.languages; track language.value) {
-                <option [value]="language.value">{{ language.label }}</option>
-              }
-            </select>
-          </label>
-          <label class="read-replies-toggle">
-            <input
-              type="checkbox"
-              [checked]="voice.readReplies()"
-              [disabled]="!voice.synthesisSupported"
-              (change)="setReadReplies($any($event.target).checked)"
-            />
-            Read replies aloud
-          </label>
-          <button
-            class="read-reply test-voice"
-            type="button"
-            [disabled]="!voice.synthesisSupported"
-            aria-describedby="voice-availability"
-            (click)="testVoice()"
-          >
-            Test voice
-          </button>
-          @if (speechActive()) {
-            <button class="stop-reading" type="button" (click)="stopReading()">
-              ■ Stop reading
-            </button>
-          }
-        </div>
         <label class="sr-only" for="message-input">Message DADUS</label>
         <textarea
           #composer
@@ -315,12 +261,48 @@
           (keydown)="onComposerKeydown($event)"
           [disabled]="sending() || loadingHistory()"
           maxlength="4000"
-          placeholder="मनातलं बोल… Message DADUS"
-          aria-describedby="composer-help"
+          [placeholder]="composerPlaceholder()"
+          aria-describedby="composer-help language-help"
         ></textarea>
         <div class="composer-actions">
-          <span>Just be yourself. <span aria-hidden="true">✦</span></span>
-          <div>
+          <div class="voice-controls" aria-label="Voice controls">
+            <button
+              class="mic-button"
+              type="button"
+              [class.listening]="voice.listening()"
+              [disabled]="!voice.recognitionSupported || sending() || loadingHistory()"
+              [attr.aria-pressed]="voice.listening()"
+              aria-describedby="voice-help"
+              (click)="toggleDictation()"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+              >
+                <rect x="9" y="3" width="6" height="12" rx="3" />
+                <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3M8 21h8" />
+              </svg>
+              {{ voice.listening() ? 'Stop dictation' : 'Mic · Speak' }}
+            </button>
+            <label class="voice-language" for="voice-language"
+              ><span class="sr-only">Language</span
+              ><select
+                id="voice-language"
+                [value]="voice.language()"
+                [disabled]="sending() || loadingHistory()"
+                (change)="changeVoiceLanguage($any($event.target).value)"
+                aria-describedby="language-help"
+              >
+                @for (language of voice.languages; track language.value) {
+                  <option [value]="language.value">{{ languageLabel(language.value) }}</option>
+                }
+              </select></label
+            >
+          </div>
+          <div class="send-actions">
             <span class="character-count" [class.near-limit]="draft().length > 3800"
               >{{ draft().length }}<span class="sr-only"> of 4000 characters</span></span
             ><button
@@ -329,12 +311,43 @@
               [disabled]="!canSend()"
               aria-label="Send message"
             >
-              <span aria-hidden="true">↑</span>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="m6 12 6-6 6 6M12 6v12" />
+              </svg>
             </button>
           </div>
         </div>
       </form>
+      <div class="speech-toolbar" aria-label="Speech playback controls">
+        <label class="read-replies-toggle"
+          ><input
+            type="checkbox"
+            [checked]="voice.readReplies()"
+            [disabled]="!voice.synthesisSupported"
+            (change)="setReadReplies($any($event.target).checked)"
+          />Read replies aloud</label
+        >
+        <button
+          class="read-reply test-voice"
+          type="button"
+          [disabled]="!voice.synthesisSupported"
+          aria-describedby="voice-availability"
+          (click)="testVoice()"
+        >
+          Test voice
+        </button>
+        @if (speechActive()) {
+          <button class="stop-reading" type="button" (click)="stopReading()">■ Stop reading</button>
+        }
+      </div>
       <div class="voice-help" id="voice-help">
+        <p id="language-help">{{ languageHelp() }}</p>
         <p id="voice-availability" role="status">{{ voice.voiceAvailability() }}</p>
         @if (!voice.recognitionSupported) {
           <p>
@@ -361,7 +374,7 @@
         <span>{{
           mode() === 'demo'
             ? 'Demo replies are samples, not a live AI model.'
-            : 'DADUS is an AI companion and can make mistakes.'
+            : 'DADUS can make mistakes. Check important information.'
         }}</span
         ><span class="keyboard-hint">Enter to send · Shift + Enter for a new line</span>
       </p>

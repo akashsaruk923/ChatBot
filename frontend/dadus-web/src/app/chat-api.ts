@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 
 export type ChatMode = 'demo' | 'openai' | 'gemini';
 export type AgentId = 'companion' | 'planner' | 'coding';
+export type ReplyLanguage = 'auto' | 'en' | 'hi' | 'mr';
 
 export interface AgentDefinition {
   id: AgentId;
@@ -42,6 +43,7 @@ export interface ChatResult {
   mode: ChatMode;
   agentId?: AgentId;
   tools?: AgentTool[];
+  language?: ReplyLanguage;
 }
 
 export interface HistoryResult {
@@ -108,10 +110,11 @@ export class ChatApi {
     message: string,
     conversationId?: string | null,
     agentId: AgentId = 'companion',
+    language: ReplyLanguage = 'auto',
   ): Observable<ChatResult> {
     return this.http.post<ChatResult>(
       '/api/chat/message',
-      { conversationId: conversationId ?? null, message, agentId },
+      { conversationId: conversationId ?? null, message, agentId, language },
       { headers: this.headers },
     );
   }

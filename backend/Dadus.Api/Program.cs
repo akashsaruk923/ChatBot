@@ -138,6 +138,7 @@ chat.MapPost("/message", async (ChatRequest request, HttpContext httpContext, Da
     var agentId = string.IsNullOrWhiteSpace(request.AgentId) ? "companion" : request.AgentId.Trim().ToLowerInvariant();
     if (!AgentCatalog.All.Any(agent => agent.Id == agentId))
         throw new ChatFailure(400, "invalid_agent", "Choose one of the available DADUS AI agents.");
+    var language = ChatLanguage.Normalize(request.Language);
     var conversationId = request.ConversationId ?? Guid.NewGuid();
     if (conversationId == Guid.Empty)
         throw new ChatFailure(400, "invalid_conversation", "Choose a valid conversation.");
@@ -167,7 +168,7 @@ chat.MapPost("/message", async (ChatRequest request, HttpContext httpContext, Da
         previous.Reverse();
         var context = previous.Select(x => new ChatTurn(x.Role, x.Content)).ToList();
         context.Add(new ChatTurn("user", text));
-        var agentReply = await responder.RunAgentAsync(agentId, context, cancellationToken);
+        var agentReply = await responder.RunAgentAsync(agentId, context, language, cancellationToken);
         var reply = agentReply.Content;
         if (string.IsNullOrWhiteSpace(reply) || reply.Length > 12000)
             throw new ChatFailure(502, "invalid_provider_response", "The AI provider returned an unusable response.");
@@ -183,7 +184,7 @@ chat.MapPost("/message", async (ChatRequest request, HttpContext httpContext, Da
         db.Messages.AddRange(userMessage, assistantMessage);
         await db.SaveChangesAsync(cancellationToken);
         return Results.Ok(new { conversationId, message = MessageDto(assistantMessage), mode = responder.Mode,
-            agentId, tools = agentReply.Tools });
+            agentId, language, tools = agentReply.Tools });
     }
     finally { gate.Release(); }
 }).RequireRateLimiting("chat");
@@ -244,5 +245,5 @@ static string ConversationTitle(string text)
     return cutoff > 0 ? text[..cutoff] : "New conversation";
 }
 
-public sealed record ChatRequest(Guid? ConversationId, string? Message, string? AgentId = null);
+public sealed record ChatRequest(Guid? ConversationId, string? Message, string? AgentId = null, string? Language = null);
 public partial class Program;

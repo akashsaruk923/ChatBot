@@ -22,6 +22,7 @@ import {
   ChatMessage,
   ChatMode,
   ConversationSummary,
+  ReplyLanguage,
 } from './chat-api';
 
 const COMPANION: AgentDefinition = {
@@ -79,6 +80,11 @@ export class App implements OnInit {
   readonly dictationNotice = signal('');
   readonly readingMessageId = signal<string | null>(null);
   readonly speechActive = computed(() => this.voice.speaking() || this.voice.preparingSpeech());
+  readonly replyLanguage = computed<ReplyLanguage>(() => {
+    if (this.voice.language() === 'en-IN') return 'en';
+    if (this.voice.language() === 'hi-IN') return 'hi';
+    return 'mr';
+  });
   readonly canSend = computed(
     () =>
       !!this.draft().trim() &&
@@ -181,6 +187,38 @@ export class App implements OnInit {
     if (mode === 'gemini') return 'Gemini';
     if (mode === 'openai') return 'OpenAI';
     return 'AI provider';
+  }
+
+  welcomeTitle(): string {
+    if (this.replyLanguage() === 'en') return 'What would you like to talk about?';
+    if (this.replyLanguage() === 'hi') return 'आज क्या बात करें?';
+    return 'आज काय बोलूया?';
+  }
+
+  welcomeSubtitle(): string {
+    if (this.replyLanguage() === 'en') return 'Talk it through in Marathi, Hindi or English.';
+    if (this.replyLanguage() === 'hi') return 'मराठी, हिन्दी या English में खुलकर बात करें.';
+    return 'मराठी, हिन्दी किंवा Englishमध्ये मनमोकळं बोल.';
+  }
+
+  composerPlaceholder(): string {
+    if (this.replyLanguage() === 'en') return 'Message DADUS';
+    if (this.replyLanguage() === 'hi') return 'मन की बात कहें…';
+    return 'मनातलं बोल…';
+  }
+
+  languageHelp(): string {
+    if (this.replyLanguage() === 'en')
+      return 'Language sets AI replies, microphone and speech. Spoken voices depend on your browser.';
+    if (this.replyLanguage() === 'hi')
+      return 'यह भाषा AI के जवाब, माइक और आवाज़ के लिए है। बोलने वाली आवाज़ आपके browser पर निर्भर है।';
+    return 'ही भाषा AIची उत्तरं, माइक आणि आवाजासाठी आहे. आवाजाची उपलब्धता तुमच्या browserवर अवलंबून आहे.';
+  }
+
+  languageLabel(language: string): string {
+    if (language === 'en-IN') return 'English';
+    if (language === 'hi-IN') return 'हिन्दी';
+    return 'मराठी';
   }
 
   private refreshConversations(): void {
@@ -301,6 +339,7 @@ export class App implements OnInit {
     this.stopVoice();
     const message = this.draft().trim();
     const agentId = this.selectedAgentId();
+    const language = this.replyLanguage();
     const pendingId = `pending-${++this.pendingSequence}`;
     this.messages.update((items) => [
       ...items,
@@ -312,7 +351,7 @@ export class App implements OnInit {
     this.sending.set(true);
     this.scrollToEnd();
     this.api
-      .send(message, this.conversationId(), agentId)
+      .send(message, this.conversationId(), agentId, language)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (result) => {
@@ -551,6 +590,8 @@ export class App implements OnInit {
             'The backend chat mode is invalid. Select Demo, Gemini or OpenAI, restart the API, then reconnect.',
           invalid_message: 'Enter a message between 1 and 4,000 characters.',
           invalid_agent: 'Choose one of the available agents, then retry.',
+          invalid_language:
+            'Choose English, हिन्दी or मराठी from Language, then retry. Your draft is still here.',
           invalid_request: 'The request could not be accepted. Check your message and try again.',
           invalid_conversation: 'Start a new conversation, then retry. Your draft is still here.',
           conversation_not_found:

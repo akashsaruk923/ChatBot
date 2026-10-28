@@ -1,37 +1,38 @@
-<section class="agent-panel" aria-labelledby="agent-label">
-  <div class="agent-picker">
-    <label id="agent-label" for="agent-select"
-      ><span class="eyebrow">NEXT MESSAGE</span><span>Choose your agent</span></label
-    >
-    <select
-      id="agent-select"
-      [ngModel]="selectedId()"
-      (ngModelChange)="agentChange.emit($event)"
-      [disabled]="busy() || loading()"
-      aria-describedby="agent-description agent-scope"
-    >
-      @for (agent of agents(); track agent.id) {
-        <option [value]="agent.id">{{ agent.name }}</option>
-      }
-    </select>
-    <span class="tool-capability"><span aria-hidden="true">✦</span> Read-only tools</span>
-  </div>
-  <p id="agent-description" class="agent-description">{{ selectedAgent()?.description }}</p>
-  <p id="agent-scope" class="agent-scope">
-    Applies to the next message. Your conversation history stays shared.
-  </p>
+<section class="agent-panel" aria-label="Agent selection">
+  <label class="sr-only" id="agent-label" for="agent-select">Choose your agent</label>
+  <select
+    id="agent-select"
+    [ngModel]="selectedId()"
+    (ngModelChange)="agentChange.emit($event)"
+    [disabled]="busy() || loading()"
+    aria-describedby="agent-description agent-scope"
+  >
+    @for (agent of agents(); track agent.id) {
+      <option [value]="agent.id">{{ agent.name }}</option>
+    }
+  </select>
+  <details class="agent-details">
+    <summary aria-label="About this agent" title="About this agent">ⓘ</summary>
+    <div class="agent-popover">
+      <p id="agent-description" class="agent-description">{{ selectedAgent()?.description }}</p>
+      <p id="agent-scope" class="agent-scope">
+        Applies to the next message. Your conversation history stays shared.
+      </p>
+      <span class="tool-capability">Read-only calculation and time tools</span>
+      <div class="tool-examples">
+        <span>Try a tool</span
+        ><button (click)="promptSelected.emit('/calculate (12+3)*2')" [disabled]="busy()">
+          /calculate (12+3)*2</button
+        ><button (click)="promptSelected.emit('/time Asia/Kolkata')" [disabled]="busy()">
+          /time Asia/Kolkata
+        </button>
+      </div>
+    </div>
+  </details>
   @if (notice()) {
     <p class="catalog-notice" role="status">
       {{ notice() }}
       <button (click)="catalogRetry.emit()" [disabled]="loading()">Reload choices</button>
     </p>
   }
-  <div class="tool-examples">
-    <span>Try a tool:</span
-    ><button (click)="promptSelected.emit('/calculate (12+3)*2')" [disabled]="busy()">
-      /calculate (12+3)*2</button
-    ><button (click)="promptSelected.emit('/time Asia/Kolkata')" [disabled]="busy()">
-      /time Asia/Kolkata
-    </button>
-  </div>
 </section>

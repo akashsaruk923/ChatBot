@@ -154,8 +154,10 @@ describe('DADUS chat', () => {
   }
 
   it('greets in Marathi and clearly labels sample replies as demo mode', () => {
-    expect(element.textContent).toContain('बोल भावा!');
-    expect(element.querySelector('h2')?.textContent).toContain('काय म्हणतोस?');
+    expect(element.querySelector('.welcome-description')?.textContent).toContain(
+      'मराठी, हिन्दी किंवा Englishमध्ये मनमोकळं बोल.',
+    );
+    expect(element.querySelector('h2')?.textContent).toContain('आज काय बोलूया?');
     expect(element.querySelector('.demo-banner')?.textContent).toContain('sample replies');
     expect(element.querySelector('.demo-banner')?.textContent).toContain('Gemini or OpenAI');
     expect(element.querySelector('.connection')?.textContent).toContain('Demo mode');
@@ -167,7 +169,7 @@ describe('DADUS chat', () => {
     api.send.mockReturnValue(result);
     await compose('नमस्कार, hello दोस्त!');
     await submit();
-    expect(api.send).toHaveBeenCalledWith('नमस्कार, hello दोस्त!', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith('नमस्कार, hello दोस्त!', null, 'companion', 'mr');
     expect(element.querySelector('textarea')?.disabled).toBe(true);
     expect(element.querySelector('.typing')?.textContent).toContain('replying');
     const unsafe = '<img src=x onerror=alert(1)>\nThis is plain text.';
@@ -207,7 +209,7 @@ describe('DADUS chat', () => {
     voice.readReplies.set(true);
     await compose('मराठीत बोलूया');
     await submit();
-    expect(api.send).toHaveBeenCalledWith('मराठीत बोलूया', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith('मराठीत बोलूया', null, 'companion', 'mr');
     expect(app.mode()).toBe('gemini');
     expect(element.querySelector('.connection')?.textContent).toContain('Gemini configured');
     expect(element.querySelector('.run-mode')?.textContent).toBe('Gemini');
@@ -355,7 +357,7 @@ describe('DADUS chat', () => {
     );
     fixture.detectChanges();
     await fixture.whenStable();
-    expect(api.send).toHaveBeenCalledWith('हाय', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith('हाय', null, 'companion', 'mr');
   });
 
   it('loads history and requests older messages with the precise timestamp cursor', async () => {
@@ -476,7 +478,7 @@ describe('DADUS chat', () => {
     expect(element.querySelector('#agent-scope')?.textContent).toContain('next message');
     await compose('Plan a weekend project');
     await submit();
-    expect(api.send).toHaveBeenCalledWith('Plan a weekend project', null, 'planner');
+    expect(api.send).toHaveBeenCalledWith('Plan a weekend project', null, 'planner', 'mr');
     expect(element.querySelector('.last-run')?.textContent).toContain('Planner');
     select.value = 'coding';
     select.dispatchEvent(new Event('change'));
@@ -515,7 +517,12 @@ describe('DADUS chat', () => {
     expect((element.querySelector('#agent-select') as HTMLSelectElement).options).toHaveLength(1);
     await compose('Hello after the catalog failed');
     await submit();
-    expect(api.send).toHaveBeenCalledWith('Hello after the catalog failed', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith(
+      'Hello after the catalog failed',
+      null,
+      'companion',
+      'mr',
+    );
     expect(app.messages()).toHaveLength(2);
     expect(element.querySelector('[role=alert]')).toBeNull();
   });
@@ -778,6 +785,119 @@ describe('DADUS chat', () => {
     expect(element.querySelector('#voice-help')?.textContent).toContain('may process audio online');
   });
 
+  it.each([
+    {
+      locale: 'en-IN',
+      language: 'en',
+      greeting: 'What would you like to talk about?',
+      placeholder: 'Message DADUS',
+      reply: 'Of course. What would you like to talk about?',
+    },
+    {
+      locale: 'hi-IN',
+      language: 'hi',
+      greeting: 'आज क्या बात करें?',
+      placeholder: 'मन की बात कहें…',
+      reply: 'ज़रूर। बताओ, आज क्या चल रहा है?',
+    },
+    {
+      locale: 'mr-IN',
+      language: 'mr',
+      greeting: 'आज काय बोलूया?',
+      placeholder: 'मनातलं बोल…',
+      reply: 'हो, बोल ना. आज काय चाललंय?',
+    },
+  ] as const)(
+    'uses $language for the AI reply, microphone and optional spoken answer',
+    async ({ locale, language, greeting, placeholder, reply }) => {
+      const select = element.querySelector('#voice-language') as HTMLSelectElement;
+      select.value = locale;
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(voice.setLanguage).toHaveBeenCalledWith(locale);
+      expect(app.replyLanguage()).toBe(language);
+      expect(element.querySelector('h2')?.textContent).toContain(greeting);
+      expect(element.querySelector('textarea')?.placeholder).toBe(placeholder);
+      voice.readReplies.set(true);
+      api.send.mockReturnValue(
+        of({ ...answer, mode: 'gemini', language, message: { ...answer.message, content: reply } }),
+      );
+      await compose('Tell me how you are doing');
+      await submit();
+      expect(api.send).toHaveBeenCalledWith(
+        'Tell me how you are doing',
+        null,
+        'companion',
+        language,
+      );
+      expect(voice.language()).toBe(locale);
+      expect(voice.readReply).toHaveBeenCalledWith(reply);
+      expect(element.querySelector('.message-feed')?.textContent).toContain(reply);
+    },
+  );
+
+  it('switches reply language on the next turn without clearing the conversation or its prior messages', async () => {
+    api.send.mockReturnValueOnce(of(answer)).mockReturnValueOnce(
+      of({
+        ...answer,
+        language: 'hi',
+        message: {
+          ...answer.message,
+          id: 'answer-hi',
+          content: 'हाँ, हम उसी बात को आगे बढ़ाते हैं।',
+        },
+      }),
+    );
+    await compose('मराठीत बोलूया');
+    await submit();
+    const before = [...app.messages()];
+    const select = element.querySelector('#voice-language') as HTMLSelectElement;
+    select.value = 'hi-IN';
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(app.conversationId()).toBe(CONVERSATION.id);
+    expect(app.messages()).toEqual(before);
+    await compose('अब हिन्दी में आगे बात करें');
+    await submit();
+    expect(api.send).toHaveBeenLastCalledWith(
+      'अब हिन्दी में आगे बात करें',
+      CONVERSATION.id,
+      'companion',
+      'hi',
+    );
+    expect(app.messages()).toHaveLength(4);
+    expect(app.messages()[0].content).toBe('मराठीत बोलूया');
+    expect(app.messages()[3].content).toBe('हाँ, हम उसी बात को आगे बढ़ाते हैं।');
+  });
+
+  it('retains the selected reply language and unsent draft when the server rejects a language setting', async () => {
+    app.changeVoiceLanguage('hi-IN');
+    api.send.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 400,
+            error: {
+              status: 400,
+              title: 'Request rejected',
+              code: 'invalid_language',
+              detail: 'PRIVATE_SERVER_DETAIL',
+            },
+          }),
+      ),
+    );
+    await compose('मुझसे बात करो');
+    await submit();
+    expect(element.querySelector('.error-banner')?.textContent).toContain(
+      'Choose English, हिन्दी or मराठी',
+    );
+    expect(element.textContent).not.toContain('PRIVATE_SERVER_DETAIL');
+    expect(app.draft()).toBe('मुझसे बात करो');
+    expect(app.replyLanguage()).toBe('hi');
+    expect(api.send).toHaveBeenCalledWith('मुझसे बात करो', null, 'companion', 'hi');
+  });
+
   it('appends dictated text to a typed draft for review without automatically sending', async () => {
     await compose('आज आपण');
     (element.querySelector('.mic-button') as HTMLButtonElement).click();
@@ -792,7 +912,7 @@ describe('DADUS chat', () => {
     (element.querySelector('.mic-button') as HTMLButtonElement).click();
     expect(voice.stopListening).toHaveBeenCalledOnce();
     await submit();
-    expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion', 'mr');
     expect(voice.stopAll).toHaveBeenCalled();
   });
 
@@ -986,7 +1106,7 @@ describe('DADUS chat', () => {
     );
     await compose('I can still type');
     await submit();
-    expect(api.send).toHaveBeenCalledWith('I can still type', null, 'companion');
+    expect(api.send).toHaveBeenCalledWith('I can still type', null, 'companion', 'mr');
     expect(element.querySelector('.message-feed')?.textContent).toContain(answer.message.content);
   });
 

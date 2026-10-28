@@ -9,4 +9,6 @@ public sealed class GeminiChatResponder(HttpClient httpClient, IConfiguration co
         responder.ReplyAsync(context, cancellationToken);
     public Task<AgentReply> RunAgentAsync(string agentId, IReadOnlyList<ChatTurn> context, CancellationToken cancellationToken) =>
         responder.RunAgentAsync(agentId, context, cancellationToken);
+    public Task<AgentReply> RunAgentAsync(string agentId, IReadOnlyList<ChatTurn> context, string? language, CancellationToken cancellationToken) =>
+        responder.RunAgentAsync(agentId, context, language, cancellationToken);
 }

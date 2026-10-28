@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { AgentDefinition, ChatApi, ChatResult, Health } from './chat-api';
+import { AgentDefinition, ChatApi, ChatResult, Health, ReplyLanguage } from './chat-api';
 
 const SESSION = 'a2aed5ba-fef3-45f4-818a-c10d61cb66f0';
 const CONVERSATION = 'b775eb28-f7d7-4edb-ab54-5cc6bb5fac64';
@@ -77,6 +77,7 @@ describe('ChatApi', () => {
       message: 'काय म्हणतोस?',
       conversationId: CONVERSATION,
       agentId: 'companion',
+      language: 'auto',
     });
     expect(request.request.headers.get('X-Dadus-Session')).toBe(SESSION);
     expect(request.request.headers.has('Authorization')).toBe(false);
@@ -110,6 +111,7 @@ describe('ChatApi', () => {
       message: 'नमस्कार',
       conversationId: null,
       agentId: 'companion',
+      language: 'auto',
     });
     expect(request.request.headers.has('Authorization')).toBe(false);
     expect(request.request.headers.has('x-goog-api-key')).toBe(false);
@@ -124,6 +126,7 @@ describe('ChatApi', () => {
       message: 'Hello',
       conversationId: null,
       agentId: 'companion',
+      language: 'auto',
     });
     request.flush({ conversationId: CONVERSATION, message: {}, mode: 'demo' });
   });
@@ -149,6 +152,38 @@ describe('ChatApi', () => {
     expect(received).toEqual(agents);
   });
 
+  it.each<ReplyLanguage>(['en', 'hi', 'mr'])(
+    'sends the explicit reply language %s separately from conversation text and credentials',
+    (language) => {
+      const result: ChatResult = {
+        conversationId: CONVERSATION,
+        message: {
+          id: `reply-${language}`,
+          role: 'assistant',
+          content: 'A reply',
+          createdAt: '2026-10-28T12:00:00Z',
+        },
+        mode: 'gemini',
+        language,
+      };
+      let received: ChatResult | undefined;
+      TestBed.inject(ChatApi)
+        .send('Please continue', CONVERSATION, 'companion', language)
+        .subscribe((reply) => (received = reply));
+      const request = http.expectOne('/api/chat/message');
+      expect(request.request.body).toEqual({
+        message: 'Please continue',
+        conversationId: CONVERSATION,
+        agentId: 'companion',
+        language,
+      });
+      expect(request.request.headers.has('Authorization')).toBe(false);
+      expect(request.request.headers.has('x-goog-api-key')).toBe(false);
+      request.flush(result);
+      expect(received?.language).toBe(language);
+    },
+  );
+
   it('sends the selected agent with an existing conversation', () => {
     TestBed.inject(ChatApi).send('Review this function', CONVERSATION, 'coding').subscribe();
     const request = http.expectOne('/api/chat/message');
@@ -156,6 +191,7 @@ describe('ChatApi', () => {
       message: 'Review this function',
       conversationId: CONVERSATION,
       agentId: 'coding',
+      language: 'auto',
     });
     request.flush({ conversationId: CONVERSATION, message: {}, mode: 'demo', agentId: 'coding' });
   });
