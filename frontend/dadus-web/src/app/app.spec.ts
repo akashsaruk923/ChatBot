@@ -1,8 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { of, Subject, throwError } from 'rxjs';
 import { App } from './app';
 import { AgentDefinition, ChatApi, ChatResult, HistoryResult } from './chat-api';
+import { VoiceService } from './voice.service';
 
 const CONVERSATION = {
   id: '9b2ef616-5a80-4cc2-9f32-c94544427048',
@@ -40,10 +42,59 @@ const answer: ChatResult = {
   mode: 'demo',
 };
 
+function createVoiceMock() {
+  const voice = {
+    recognitionSupported: true,
+    synthesisSupported: true,
+    languages: [
+      { value: 'mr-IN', label: 'Marathi' },
+      { value: 'hi-IN', label: 'Hindi' },
+      { value: 'en-IN', label: 'English' },
+    ],
+    language: signal('mr-IN'),
+    listening: signal(false),
+    speaking: signal(false),
+    readReplies: signal(false),
+    status: signal(''),
+    error: signal(''),
+    startListening: vi.fn<(onFinalTranscript: (text: string) => void) => void>(),
+    stopListening: vi.fn(),
+    cancelListening: vi.fn(),
+    setLanguage: vi.fn(),
+    setReadReplies: vi.fn(),
+    readReply: vi.fn(),
+    speak: vi.fn(),
+    stopSpeaking: vi.fn(),
+    stopAll: vi.fn(),
+  };
+  voice.startListening.mockImplementation(() => voice.listening.set(true));
+  voice.stopListening.mockImplementation(() => voice.listening.set(false));
+  voice.cancelListening.mockImplementation(() => voice.listening.set(false));
+  voice.stopSpeaking.mockImplementation(() => voice.speaking.set(false));
+  voice.stopAll.mockImplementation(() => {
+    voice.listening.set(false);
+    voice.speaking.set(false);
+  });
+  voice.setLanguage.mockImplementation((language: string) => {
+    voice.stopAll();
+    voice.language.set(language);
+  });
+  voice.setReadReplies.mockImplementation((enabled: boolean) => {
+    voice.readReplies.set(enabled);
+    if (!enabled) voice.stopSpeaking();
+  });
+  voice.speak.mockImplementation(() => {
+    voice.listening.set(false);
+    voice.speaking.set(true);
+  });
+  return voice;
+}
+
 describe('DADUS chat', () => {
   let fixture: ComponentFixture<App>;
   let app: App;
   let element: HTMLElement;
+  let voice: ReturnType<typeof createVoiceMock>;
   let api: {
     agents: ReturnType<typeof vi.fn>;
     health: ReturnType<typeof vi.fn>;
@@ -53,6 +104,7 @@ describe('DADUS chat', () => {
   };
 
   beforeEach(async () => {
+    voice = createVoiceMock();
     api = {
       agents: vi.fn(() => of({ agents: AGENTS })),
       health: vi.fn(() => of({ status: 'ok', database: 'ready', mode: 'demo' })),
@@ -62,7 +114,10 @@ describe('DADUS chat', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: ChatApi, useValue: api }],
+      providers: [
+        { provide: ChatApi, useValue: api },
+        { provide: VoiceService, useValue: voice },
+      ],
     }).compileComponents();
     fixture = TestBed.createComponent(App);
     app = fixture.componentInstance;
@@ -120,7 +175,12 @@ describe('DADUS chat', () => {
         () =>
           new HttpErrorResponse({
             status: 503,
-            error: { detail: 'The provider is not configured.' },
+            error: {
+              status: 503,
+              title: 'Service unavailable',
+              code: 'key_missing',
+              detail: 'The provider is not configured.',
+            },
           }),
       ),
     );
@@ -128,7 +188,7 @@ describe('DADUS chat', () => {
     await submit();
     expect(element.querySelector('textarea')?.value).toBe('Please help me plan tomorrow.');
     expect(element.querySelector('[role=alert]')?.textContent).toContain(
-      'The provider is not configured.',
+      'Set the API key in the backend',
     );
     expect(element.querySelectorAll('.message')).toHaveLength(0);
     await submit();
@@ -571,5 +631,215 @@ describe('DADUS chat', () => {
     expect(app.checkingConnection()).toBe(false);
     expect(app.connectionCode()).toBe('');
     expect(element.querySelector('.connection-banner')).toBeNull();
+  });
+
+  it('shows mic and language controls without requesting the microphone or speaking on load', () => {
+    expect(element.querySelector('.mic-button')?.textContent).toContain('Mic');
+    expect((element.querySelector('#voice-language') as HTMLSelectElement).value).toBe('mr-IN');
+    expect((element.querySelector('.read-replies-toggle input') as HTMLInputElement).checked).toBe(
+      false,
+    );
+    expect(voice.startListening).not.toHaveBeenCalled();
+    expect(voice.speak).not.toHaveBeenCalled();
+    expect(voice.readReply).not.toHaveBeenCalled();
+    expect(element.querySelector('#voice-help')?.textContent).toContain('may process audio online');
+  });
+
+  it('appends dictated text to a typed draft for review without automatically sending', async () => {
+    await compose('आज आपण');
+    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(element.querySelector('.mic-button')?.textContent).toContain('Stop dictation');
+    const transcript = voice.startListening.mock.calls[0][0];
+    transcript('मराठीत गप्पा मारूया');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(element.querySelector('textarea')?.value).toBe('आज आपण मराठीत गप्पा मारूया');
+    expect(api.send).not.toHaveBeenCalled();
+    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    expect(voice.stopListening).toHaveBeenCalledOnce();
+    await submit();
+    expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion');
+    expect(voice.stopAll).toHaveBeenCalled();
+  });
+
+  it('limits dictated drafts to 4,000 characters and explains truncation', async () => {
+    await compose('x'.repeat(3998));
+    app.toggleDictation();
+    voice.startListening.mock.calls[0][0]('काही नवीन शब्द');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.draft().length).toBe(4000);
+    expect(app.draft().startsWith('x'.repeat(3998))).toBe(true);
+    expect(element.querySelector('#voice-help')?.textContent).toContain('4,000-character limit');
+    expect(api.send).not.toHaveBeenCalled();
+  });
+
+  it('discards late dictation after changing conversations and cleans up on destroy', async () => {
+    await compose('Keep my draft');
+    app.toggleDictation();
+    const transcript = voice.startListening.mock.calls[0][0];
+    app.newConversation();
+    transcript('stale words from the old chat');
+    expect(app.draft()).toBe('Keep my draft');
+    expect(voice.stopAll).toHaveBeenCalledOnce();
+    fixture.destroy();
+    expect(voice.stopAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables dictation during a request and does not let late text replace a failed draft', async () => {
+    const response = new Subject<ChatResult>();
+    api.send.mockReturnValue(response);
+    await compose('Please reply');
+    app.toggleDictation();
+    const transcript = voice.startListening.mock.calls[0][0];
+    await submit();
+    expect((element.querySelector('.mic-button') as HTMLButtonElement).disabled).toBe(true);
+    transcript('late microphone result');
+    expect(app.draft()).toBe('');
+    response.error(new HttpErrorResponse({ status: 0 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.draft()).toBe('Please reply');
+    expect(element.querySelector('.error-banner')?.textContent).toContain('port 5088');
+  });
+
+  it('cancels voice when changing language and never auto-reads history', async () => {
+    voice.listening.set(true);
+    const select = element.querySelector('#voice-language') as HTMLSelectElement;
+    select.value = 'hi-IN';
+    select.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(voice.setLanguage).toHaveBeenCalledWith('hi-IN');
+    expect(voice.listening()).toBe(false);
+    voice.readReplies.set(true);
+    api.history.mockReturnValue(
+      of({ conversationId: CONVERSATION.id, messages: [answer.message], hasMore: false }),
+    );
+    app.selectConversation(CONVERSATION);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(voice.readReply).not.toHaveBeenCalled();
+    expect(voice.speak).not.toHaveBeenCalled();
+  });
+
+  it('reads new replies only after opt-in and allows explicit reading and stopping', async () => {
+    await compose('Hello');
+    await submit();
+    expect(voice.readReply).not.toHaveBeenCalled();
+    expect(voice.speak).not.toHaveBeenCalled();
+    const read = element.querySelector('.read-reply') as HTMLButtonElement;
+    read.click();
+    fixture.detectChanges();
+    expect(voice.speak).toHaveBeenCalledWith(answer.message.content);
+    expect(read.textContent).toContain('Stop reading');
+    read.click();
+    fixture.detectChanges();
+    expect(voice.stopSpeaking).toHaveBeenCalled();
+    const toggle = element.querySelector('.read-replies-toggle input') as HTMLInputElement;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    await compose('Another question');
+    await submit();
+    expect(voice.readReply).toHaveBeenCalledWith(answer.message.content);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    expect(voice.readReplies()).toBe(false);
+    expect(voice.stopSpeaking).toHaveBeenCalled();
+  });
+
+  it('keeps voice controls visible with honest unsupported guidance while typing still works', async () => {
+    voice.recognitionSupported = false;
+    voice.synthesisSupported = false;
+    fixture.detectChanges();
+    expect((element.querySelector('.mic-button') as HTMLButtonElement).disabled).toBe(true);
+    expect((element.querySelector('.read-replies-toggle input') as HTMLInputElement).disabled).toBe(
+      true,
+    );
+    expect(element.querySelector('#voice-help')?.textContent).toContain(
+      'Mic dictation is unavailable',
+    );
+    expect(element.querySelector('#voice-help')?.textContent).toContain(
+      'Reading aloud is unavailable',
+    );
+    await compose('I can still type');
+    await submit();
+    expect(api.send).toHaveBeenCalledWith('I can still type', null, 'companion');
+    expect(element.querySelector('.message-feed')?.textContent).toContain(answer.message.content);
+  });
+
+  it('lets the user opt out of reading while waiting for an AI reply', async () => {
+    const response = new Subject<ChatResult>();
+    api.send.mockReturnValue(response);
+    voice.readReplies.set(true);
+    await compose('Please answer without speaking');
+    await submit();
+    const toggle = element.querySelector('.read-replies-toggle input') as HTMLInputElement;
+    expect(toggle.disabled).toBe(false);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    response.next(answer);
+    response.complete();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(voice.readReply).not.toHaveBeenCalled();
+    expect(element.querySelector('.message-feed')?.textContent).toContain(answer.message.content);
+  });
+
+  it.each([
+    { code: 'provider_authentication_failed', expected: 'rejected the backend API key' },
+    { code: 'provider_access_denied', expected: 'project and model permissions' },
+    { code: 'provider_quota_exceeded', expected: 'API billing' },
+    { code: 'provider_rate_limited', expected: 'Wait a little' },
+    { code: 'provider_model_unavailable', expected: 'backend model setting' },
+    { code: 'provider_unavailable', expected: 'backend internet connection' },
+    { code: 'provider_failed', expected: 'backend API key, model access and API billing' },
+  ])(
+    'explains $code without exposing provider details or losing the draft',
+    async ({ code, expected }) => {
+      api.send.mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 502,
+              error: {
+                status: 502,
+                title: 'Service unavailable',
+                code,
+                detail: 'PRIVATE_KEY_VALUE private-provider-body',
+              },
+            }),
+        ),
+      );
+      await compose('Please answer this');
+      await submit();
+      const error = element.querySelector('.error-banner')!;
+      expect(error.textContent).toContain(expected);
+      expect(error.textContent).not.toContain('PRIVATE_KEY_VALUE');
+      expect(error.textContent).not.toContain('private-provider-body');
+      expect(element.querySelector('textarea')?.value).toBe('Please answer this');
+      expect(app.messages()).toEqual([]);
+    },
+  );
+
+  it('does not echo unknown chat failure bodies and explains unclassified proxy failures', async () => {
+    api.send.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 502,
+            error: { detail: '<html>PRIVATE_SERVER_DATA</html>' },
+          }),
+      ),
+    );
+    await compose('Keep this message');
+    await submit();
+    expect(element.querySelector('.error-banner')?.textContent).toContain(
+      'backend terminal on port 5088',
+    );
+    expect(element.querySelector('.error-banner')?.textContent).not.toContain(
+      'PRIVATE_SERVER_DATA',
+    );
+    expect(app.draft()).toBe('Keep this message');
   });
 });

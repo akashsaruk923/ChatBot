@@ -13,6 +13,7 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { AgentPicker } from './agent-picker';
+import { VoiceService } from './voice.service';
 import {
   AgentDefinition,
   AgentId,
@@ -44,6 +45,7 @@ interface AgentRun {
 export class App implements OnInit {
   private readonly api = inject(ChatApi);
   private readonly destroyRef = inject(DestroyRef);
+  readonly voice = inject(VoiceService);
   private readonly composer = viewChild<ElementRef<HTMLTextAreaElement>>('composer');
   private readonly messageEnd = viewChild<ElementRef<HTMLElement>>('messageEnd');
   private selectionVersion = 0;
@@ -74,6 +76,8 @@ export class App implements OnInit {
   readonly sidebarOpen = signal(false);
   readonly error = signal('');
   readonly historyError = signal('');
+  readonly dictationNotice = signal('');
+  readonly readingMessageId = signal<string | null>(null);
   readonly canSend = computed(
     () =>
       !!this.draft().trim() &&
@@ -86,6 +90,10 @@ export class App implements OnInit {
       this.conversations().find((item) => item.id === this.conversationId())?.title ??
       'A fresh conversation',
   );
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.voice.stopAll());
+  }
 
   ngOnInit(): void {
     this.checkConnection();
@@ -153,7 +161,10 @@ export class App implements OnInit {
   selectAgent(id: string): void {
     if (this.sending()) return;
     const agent = this.agents().find((item) => item.id === id);
-    if (agent) this.selectedAgentId.set(agent.id);
+    if (agent) {
+      this.stopVoice();
+      this.selectedAgentId.set(agent.id);
+    }
   }
 
   toolLabel(name: string): string {
@@ -184,6 +195,7 @@ export class App implements OnInit {
 
   newConversation(): void {
     if (this.sending()) return;
+    this.stopVoice();
     this.selectionVersion++;
     this.conversationId.set(null);
     this.messages.set([]);
@@ -198,6 +210,7 @@ export class App implements OnInit {
 
   selectConversation(conversation: ConversationSummary): void {
     if (this.sending()) return;
+    this.stopVoice();
     const version = ++this.selectionVersion;
     this.conversationId.set(conversation.id);
     this.messages.set([]);
@@ -235,6 +248,7 @@ export class App implements OnInit {
     const id = this.conversationId();
     const before = this.messages()[0]?.createdAt;
     if (!id || !before || this.loadingOlder() || this.sending()) return;
+    this.stopVoice();
     const version = this.selectionVersion;
     this.loadingOlder.set(true);
     this.api
@@ -261,6 +275,8 @@ export class App implements OnInit {
   }
 
   usePrompt(prompt: string): void {
+    if (this.sending() || this.loadingHistory()) return;
+    this.stopVoice();
     this.draft.set(prompt);
     this.focusComposer();
   }
@@ -274,6 +290,7 @@ export class App implements OnInit {
 
   sendMessage(): void {
     if (!this.canSend()) return;
+    this.stopVoice();
     const message = this.draft().trim();
     const agentId = this.selectedAgentId();
     const pendingId = `pending-${++this.pendingSequence}`;
@@ -311,6 +328,10 @@ export class App implements OnInit {
           this.connectionCode.set('');
           this.connected.set(true);
           this.sending.set(false);
+          if (this.voice.readReplies()) {
+            this.readingMessageId.set(result.message.id);
+            this.voice.readReply(result.message.content);
+          }
           this.refreshConversations();
           this.scrollToEnd();
           this.focusComposer();
@@ -328,6 +349,64 @@ export class App implements OnInit {
           this.focusComposer();
         },
       });
+  }
+
+  toggleDictation(): void {
+    if (this.sending() || this.loadingHistory()) return;
+    this.dictationNotice.set('');
+    if (this.voice.listening()) {
+      this.voice.stopListening();
+      return;
+    }
+    const version = this.selectionVersion;
+    this.readingMessageId.set(null);
+    this.voice.startListening((transcript) => {
+      if (version !== this.selectionVersion || this.sending() || this.loadingHistory()) return;
+      const words = transcript.trim();
+      if (!words) return;
+      const current = this.draft();
+      const next = `${current}${current && !/\s$/.test(current) ? ' ' : ''}${words}`;
+      let accepted = next.slice(0, 4000);
+      if (/[\uD800-\uDBFF]$/.test(accepted)) accepted = accepted.slice(0, -1);
+      this.draft.set(accepted);
+      if (next.length > 4000)
+        this.dictationNotice.set(
+          'The 4,000-character limit was reached. Review your draft before sending.',
+        );
+      this.focusComposer();
+    });
+  }
+
+  changeVoiceLanguage(language: string): void {
+    this.dictationNotice.set('');
+    this.readingMessageId.set(null);
+    this.voice.setLanguage(language);
+  }
+
+  setReadReplies(enabled: boolean): void {
+    this.voice.setReadReplies(enabled);
+    if (!enabled) this.readingMessageId.set(null);
+  }
+
+  readMessage(message: ChatMessage): void {
+    if (message.role !== 'assistant' || this.sending() || this.loadingHistory()) return;
+    if (this.voice.speaking() && this.readingMessageId() === message.id) {
+      this.stopReading();
+      return;
+    }
+    this.readingMessageId.set(message.id);
+    this.voice.speak(message.content);
+  }
+
+  stopReading(): void {
+    this.voice.stopSpeaking();
+    this.readingMessageId.set(null);
+  }
+
+  private stopVoice(): void {
+    this.voice.stopAll();
+    this.dictationNotice.set('');
+    this.readingMessageId.set(null);
   }
 
   private healthIssue(failure: HttpErrorResponse): { message: string; code: string } {
@@ -380,8 +459,61 @@ export class App implements OnInit {
   private errorMessage(failure: HttpErrorResponse, fallback: string): string {
     if (failure.status === 429)
       return 'A little breather: too many messages were sent. Your draft is saved; try again in a minute.';
-    // API ProblemDetails contains user-safe text; Angular interpolation escapes it.
-    return typeof failure.error?.detail === 'string' ? failure.error.detail : fallback;
+    if (failure.status === 0)
+      return 'Cannot reach the API on port 5088. Start the backend, then reconnect and retry. Your draft is still here.';
+    const problem: unknown = failure.error;
+    if (problem && typeof problem === 'object' && !Array.isArray(problem)) {
+      const value = problem as Record<string, unknown>;
+      if (
+        value['status'] === failure.status &&
+        typeof value['title'] === 'string' &&
+        typeof value['detail'] === 'string'
+      ) {
+        const guidance: Record<string, string> = {
+          key_missing:
+            'OpenAI access is not configured. Set the API key in the backend, restart it, then reconnect. Your draft is still here.',
+          provider_authentication_failed:
+            'OpenAI rejected the backend API key. Check or replace it in the backend settings, restart the API, then retry. Your draft is still here.',
+          provider_access_denied:
+            'OpenAI denied access. Check the API project and model permissions, then retry. Your draft is still here.',
+          provider_quota_exceeded:
+            'OpenAI API quota is exhausted. Check API billing, available credit and project spending limits, then retry. Your draft is still here.',
+          provider_rate_limited:
+            'OpenAI is receiving too many requests. Wait a little, then retry. Your draft is still here.',
+          provider_model_unavailable:
+            'The configured OpenAI model is unavailable to this project. Check the backend model setting and project access, then retry. Your draft is still here.',
+          provider_unavailable:
+            'OpenAI is unavailable. Check the backend internet connection and try again shortly. Your draft is still here.',
+          provider_timeout:
+            'OpenAI took too long to reply. Please retry. Your draft is still here.',
+          provider_failed:
+            'OpenAI rejected the request. Check the backend API key, model access and API billing, then retry. Your draft is still here.',
+          invalid_provider_response:
+            'OpenAI returned an unusable response. Please retry. Your draft is still here.',
+          incomplete_provider_response:
+            'OpenAI did not finish its reply. Please retry with a smaller request. Your draft is still here.',
+          agent_limit_exceeded:
+            'The agent reached its tool-use limit. Please try a smaller request. Your draft is still here.',
+          database_unavailable:
+            'Conversation storage is unavailable. Check SQL Server and run the database migrations before retrying. Your draft is still here.',
+          demo_not_allowed:
+            'Demo mode requires Development. Start the backend in Development or configure OpenAI, then reconnect.',
+          invalid_chat_mode:
+            'The backend chat mode is invalid. Select Demo or OpenAI, restart the API, then reconnect.',
+          invalid_message: 'Enter a message between 1 and 4,000 characters.',
+          invalid_agent: 'Choose one of the available agents, then retry.',
+          invalid_request: 'The request could not be accepted. Check your message and try again.',
+          invalid_conversation: 'Start a new conversation, then retry. Your draft is still here.',
+          conversation_not_found:
+            'This conversation is unavailable. Start a new conversation. Your draft is still here.',
+        };
+        if (typeof value['code'] === 'string' && Object.hasOwn(guidance, value['code']))
+          return guidance[value['code']];
+      }
+    }
+    if (failure.status === 502)
+      return 'The request failed. Check the backend terminal on port 5088, then reconnect and retry. Your draft is still here.';
+    return fallback;
   }
   private focusComposer(): void {
     setTimeout(() => this.composer()?.nativeElement.focus());

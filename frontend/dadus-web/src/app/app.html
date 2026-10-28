@@ -170,6 +170,21 @@
                 }}</time>
               </div>
               <p>{{ message.content }}</p>
+              @if (message.role === 'assistant') {
+                <button
+                  class="read-reply"
+                  type="button"
+                  [disabled]="!voice.synthesisSupported || sending() || loadingHistory()"
+                  [attr.aria-pressed]="voice.speaking() && readingMessageId() === message.id"
+                  (click)="readMessage(message)"
+                >
+                  {{
+                    voice.speaking() && readingMessageId() === message.id
+                      ? '■ Stop reading'
+                      : '◖ Read aloud'
+                  }}
+                </button>
+              }
             </div>
           </article>
         }
@@ -216,6 +231,58 @@
         </div>
       }
       <form class="composer" (ngSubmit)="sendMessage()">
+        <div class="voice-controls" aria-label="Voice controls">
+          <button
+            class="mic-button"
+            type="button"
+            [class.listening]="voice.listening()"
+            [disabled]="!voice.recognitionSupported || sending() || loadingHistory()"
+            [attr.aria-pressed]="voice.listening()"
+            aria-describedby="voice-help"
+            (click)="toggleDictation()"
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <rect x="9" y="3" width="6" height="12" rx="3" />
+              <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3M8 21h8" />
+            </svg>
+            {{ voice.listening() ? 'Stop dictation' : 'Mic · Speak' }}
+          </button>
+          <label class="voice-language" for="voice-language">
+            Voice language
+            <select
+              id="voice-language"
+              [value]="voice.language()"
+              [disabled]="sending() || loadingHistory()"
+              (change)="changeVoiceLanguage($any($event.target).value)"
+            >
+              @for (language of voice.languages; track language.value) {
+                <option [value]="language.value">{{ language.label }}</option>
+              }
+            </select>
+          </label>
+          <label class="read-replies-toggle">
+            <input
+              type="checkbox"
+              [checked]="voice.readReplies()"
+              [disabled]="!voice.synthesisSupported"
+              (change)="setReadReplies($any($event.target).checked)"
+            />
+            Read replies aloud
+          </label>
+          @if (voice.speaking()) {
+            <button class="stop-reading" type="button" (click)="stopReading()">
+              ■ Stop reading
+            </button>
+          }
+        </div>
         <label class="sr-only" for="message-input">Message DADUS</label>
         <textarea
           #composer
@@ -246,6 +313,31 @@
           </div>
         </div>
       </form>
+      <div class="voice-help" id="voice-help">
+        @if (!voice.recognitionSupported) {
+          <p>
+            Mic dictation is unavailable in this browser. Try Chrome or Edge on localhost or HTTPS;
+            you can still type.
+          </p>
+        } @else {
+          <p>
+            Mic uses your browser's speech service and may process audio online. Review the text,
+            then press Send.
+          </p>
+        }
+        @if (!voice.synthesisSupported) {
+          <p>Reading aloud is unavailable in this browser. Text replies still work.</p>
+        }
+        @if (voice.error()) {
+          <p class="voice-error" role="alert">{{ voice.error() }}</p>
+        }
+        @if (voice.status()) {
+          <p class="voice-status" role="status">{{ voice.status() }}</p>
+        }
+        @if (dictationNotice()) {
+          <p class="voice-status" role="status">{{ dictationNotice() }}</p>
+        }
+      </div>
       <p id="composer-help" class="composer-help">
         <span>{{
           mode() === 'demo'

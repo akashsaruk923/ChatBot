@@ -1,8 +1,8 @@
 # DADUS AI
 
-A local text-chat and AI-agent starter for DADUS AI: Angular UI, ASP.NET Core 8 / C# agents, EF Core 8 and SQL Server. The interface supports Unicode text in Marathi, Hindi, English and mixed language. Replies and tool summaries are escaped plain text.
+A local chat and AI-agent starter for DADUS AI: Angular UI, ASP.NET Core 8 / C# agents, EF Core 8 and SQL Server. The interface supports Unicode text in Marathi, Hindi, English and mixed language, with optional browser microphone dictation and spoken replies. Replies and tool summaries are escaped plain text.
 
-Development starts in **Demo** mode. Demo replies are deterministic, visibly labelled, and do not call an AI model. OpenAI replies require a server-side key. This starter is for local development: anonymous browser sessions are separated, but account authentication is required before deployment. Voice, wake-word recognition, personal memory, reminders and mobile clients are later milestones.
+Development starts in **Demo** mode. Demo replies are deterministic, visibly labelled, and do not call an AI model. OpenAI replies require a server-side key. This starter is for local development: anonymous browser sessions are separated, but account authentication is required before deployment. Real-time voice conversations, wake-word recognition, personal memory, reminders and mobile clients are later milestones.
 
 ## Prerequisites
 
@@ -58,6 +58,37 @@ Never place the permanent API key in Angular, Git or chat messages. The applicat
 
 No key is needed for Demo mode. The API reports missing live configuration as HTTP 503 and does not silently substitute a demo answer.
 
+For Windows development, right-click **Dadus.Api → Manage User Secrets** in Visual Studio and add `DadusOpenAI:ApiKey` in the local JSON editor, preserving any existing settings. This initializes a local `UserSecretsId` when needed. Stop the backend before doing the following in its existing **CMD** window, keeping the working SQL environment:
+
+```bat
+set "ASPNETCORE_ENVIRONMENT=Development"
+set "Chat__Mode=OpenAI"
+dotnet run --project backend\Dadus.Api --no-launch-profile --urls http://127.0.0.1:5088
+```
+
+Run this from the repository root. Use a normal build after initializing User Secrets so the assembly includes the local secrets ID. Do not use `--no-build` for that first run. **OpenAI configured** means the key is present; send a message to verify that the account can actually call the model. OpenAI API billing is separate from a ChatGPT subscription.
+
+Failed provider requests show fixed recovery guidance and preserve the draft:
+
+| Code | Action |
+| --- | --- |
+| `provider_authentication_failed` | Replace the rejected backend API key in the local secret store. |
+| `provider_access_denied` | Check the API project's permissions and model access. |
+| `provider_quota_exceeded` | Check API billing, available credits and project limits. |
+| `provider_rate_limited` | Wait before retrying; check the project's API rate limits. |
+| `provider_model_unavailable` | Check `DadusOpenAI__Model` against models available to the project. |
+| `provider_unavailable` | Check connectivity or retry when the provider recovers. |
+
+The application never displays the raw provider error body or key. These diagnostics do not validate live access without a successful real chat request.
+
+## Microphone and spoken replies
+
+Choose Marathi, Hindi or English beside the composer, then use **Mic** and allow microphone access in the browser. Use **Stop dictation**, review the recognized text in the draft, and press **Send** yourself. Dictation never sends a message automatically. A recent Chrome or Edge on localhost is a useful starting point; recognition support, permissions and language availability depend on the browser and may require an internet connection. A recognition failure leaves manual text input available.
+
+Enable **Read replies aloud** to read new replies automatically, or use an assistant message's **Read aloud** control. Spoken output uses matching voices supplied by the browser or operating system. If no voice is available for the selected language, the interface explains that; installing a suitable system voice or choosing another available language may help. Marathi speech output is not guaranteed on every PC. Stop playback before dictating to avoid recognizing the app's own voice.
+
+The application does not record or store audio. Browser speech recognition or synthesis may use the browser vendor's online speech services; only reviewed text that you explicitly send follows the normal chat/storage flow. The microphone is activated only by its button, and automatic reading starts off. This is turn-by-turn dictation and reading, without wake words, background listening or real-time audio streaming. Voice tests use browser API mocks; actual microphone and voice availability must be checked on the user's device.
+
 ## AI agents in .NET
 
 Keep the Angular interface and choose an agent before sending a message:
@@ -95,6 +126,23 @@ dotnet tool restore
 dotnet run --project backend/Dadus.Api --no-launch-profile -- --migrate
 dotnet run --project backend/Dadus.Api --no-launch-profile
 ```
+
+For **Command Prompt (CMD)**, use `set` instead of PowerShell's `$env:` syntax. From the repository root:
+
+```bat
+set "ASPNETCORE_ENVIRONMENT=Development"
+set "Database__Provider=SqlServer"
+set "ConnectionStrings__Dadus=Server=.\SQLEXPRESS;Database=Dadus;Integrated Security=True;Encrypt=True;TrustServerCertificate=True"
+dotnet run --project backend\Dadus.Api --no-launch-profile -- --migrate
+```
+
+Only after migration succeeds, run:
+
+```bat
+dotnet run --project backend\Dadus.Api --no-build --no-launch-profile --urls http://127.0.0.1:5088
+```
+
+If a build reports that `Dadus.Api.exe` is locked, stop the earlier backend with Ctrl+C or Visual Studio's Shift+F5 before rebuilding. Keep one backend instance running.
 
 In a second PowerShell window, run `npm start` from `frontend/dadus-web`. The Angular proxy targets API port 5088. Windows account/SQL Express permissions are prerequisites for integrated authentication. To use SQLite instead, select `Database__Provider=Sqlite`, clear an unrelated SQL Server connection string, and run the same migration/start commands in Development.
 

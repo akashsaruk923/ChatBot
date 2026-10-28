@@ -4,7 +4,7 @@ The Angular client calls relative `/api` routes. During development, the Angular
 
 ```mermaid
 flowchart LR
-  Browser[Angular text chat] -->|/api + anonymous session header| API[ASP.NET Core API]
+  Browser[Angular chat with optional dictation and reading] -->|/api + anonymous session header| API[ASP.NET Core API]
   API --> EF[EF Core]
   EF --> SQL[(SQL Server)]
   API --> Demo[Labelled development demo responder]
@@ -38,3 +38,11 @@ Setting `Database__Provider=Sqlite` explicitly enables a Development-only local 
 The static agent catalog defines Companion, Planner and Coding roles. Each request selects an allowed catalog ID. An agent can use only server-defined function tools, not arbitrary model-supplied code. The calculator parses a limited arithmetic grammar, and the time tool validates its time zone. Live responses can include tool calls: the server validates names/arguments, runs bounded local tools, appends tool results, and asks the model for its final answer. The run has a shared deadline and bounded iterations/tool calls. Only final assistant text and concise tool results are returned; internal model reasoning is not exposed.
 
 Agent/tool errors do not bypass session ownership or permit a partial user/assistant exchange to be saved. The agent choice applies to that turn and does not alter the existing message schema. Tool summaries are returned for the current run and are not persisted. History contains the completed user/assistant message pairs. Demo commands can exercise the actual local tools, with explicit demo labelling; simulated model transports belong only in tests.
+
+## Browser voice controls
+
+The Angular voice service detects browser speech recognition and synthesis separately. Recognition starts only after an explicit microphone action, places final transcripts in the draft, and never sends automatically. The selected Marathi/Hindi/English language controls recognition and matching output voices. Reading new replies requires opt-in; an existing reply can be read by its own button. Cancellation invalidates old callbacks when the conversation or language changes, sending begins, or the component is destroyed.
+
+Audio does not pass through the .NET API or enter the conversation schema. Browser speech services may process audio online. Only text explicitly submitted by the user follows the normal chat pipeline. Missing recognition support, denied permission, unavailable languages and absent matching output voices have user-visible notices. This feature does not provide real-time audio streaming, wake words or background listening.
+
+Provider HTTP failures map to fixed application codes for rejected authentication, denied access, quota, rate limits, unavailable models and provider outages. Only a bounded, recognized quota code is read from a provider error body; raw provider messages and credentials are never returned to the client.

@@ -94,7 +94,7 @@ public sealed class OpenAiChatResponder(HttpClient httpClient, IConfiguration co
                 });
                 using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
                 if (!response.IsSuccessStatusCode)
-                    throw new ChatFailure(502, "provider_failed", "The AI provider could not complete the request. Please try again later.");
+                    throw await ProviderFailureAsync(response, token);
                 using var document = await ReadResponseAsync(response, token);
                 var (message, finishReason) = ReadAssistantMessage(document.RootElement);
                 var calls = ReadToolCalls(message, callIds);
@@ -239,6 +239,41 @@ public sealed class OpenAiChatResponder(HttpClient httpClient, IConfiguration co
         }
         buffer.Position = 0;
         return await JsonDocument.ParseAsync(buffer, new JsonDocumentOptions { MaxDepth = 32 }, token);
+    }
+
+    private static async Task<ChatFailure> ProviderFailureAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        // Provider diagnostics can contain credentials or user text. Only a known status
+        // and, for quota errors, an allowlisted code select fixed messages for the client.
+        switch ((int)response.StatusCode)
+        {
+            case 401:
+                return new(502, "provider_authentication_failed", "OpenAI rejected the server API key. Update the backend key and restart the API.");
+            case 403:
+                return new(502, "provider_access_denied", "OpenAI denied this request. Check the API project's permissions and model access.");
+            case 404:
+                return new(502, "provider_model_unavailable", "The configured OpenAI model is unavailable. Check the backend model setting and project access.");
+            case 429:
+                var quotaExceeded = false;
+                try
+                {
+                    using var document = await ReadResponseAsync(response, token);
+                    var root = document.RootElement;
+                    quotaExceeded = root.ValueKind == JsonValueKind.Object &&
+                        root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+                        error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String &&
+                        code.GetString() is "insufficient_quota" or "billing_hard_limit_reached";
+                }
+                catch (JsonException) { }
+                catch (ChatFailure failure) when (failure.Code == "invalid_provider_response") { }
+                return quotaExceeded
+                    ? new(502, "provider_quota_exceeded", "OpenAI API quota is exhausted. Check API billing and project limits before retrying.")
+                    : new(502, "provider_rate_limited", "OpenAI is rate limiting requests. Wait briefly and try again.");
+            case >= 500:
+                return new(502, "provider_unavailable", "OpenAI is temporarily unavailable. Try again later.");
+            default:
+                return new(502, "provider_failed", "The AI provider could not complete the request. Please try again later.");
+        }
     }
 
     private static ChatFailure InvalidResponse() =>
