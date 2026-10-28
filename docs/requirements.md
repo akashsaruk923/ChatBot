@@ -5,7 +5,7 @@ This repository starts the web MVP described in the supplied DADUS AI handoff. T
 ## Included
 
 - Responsive DADUS AI branding and a text composer supporting Marathi, Hindi, English and mixed text.
-- A clearly labelled development demo responder, plus a server-side OpenAI integration selected through configuration.
+- A clearly labelled development demo responder, plus server-side Gemini and OpenAI integrations selected through configuration. Gemini supports Google AI Studio projects with free-tier allowance; account/model eligibility and quota must be checked separately.
 - Conversation creation, persisted message pairs, conversation switching and paginated history.
 - Anonymous browser-session separation for local development, input limits, structured error responses and rate limits.
 - Explicit database migrations, pinned tools, lockfiles, automated tests and repeatable cloud startup instructions.
@@ -29,4 +29,4 @@ This repository starts the web MVP described in the supplied DADUS AI handoff. T
 
 Real authentication and authorized account ownership are required before deployment. The anonymous session header used here is not an identity system. Personal memory, reminders, exports/deletion controls, production abuse controls, authentication, real-time voice, browser wake-word prototypes and Ionic/Capacitor mobile clients remain separate increments.
 
-Do not claim reliable wake recognition, Marathi speech output, background listening or live OpenAI behavior from mocked development tests. Microphone permission is requested only after the user activates dictation; automatic reply reading is off until enabled.
+Do not claim reliable wake recognition, Marathi speech output, background listening or live provider behavior from mocked development tests. Microphone permission is requested only after the user activates dictation; automatic reply reading is off until enabled.

@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { AgentDefinition, ChatApi, ChatResult } from './chat-api';
+import { AgentDefinition, ChatApi, ChatResult, Health } from './chat-api';
 
 const SESSION = 'a2aed5ba-fef3-45f4-818a-c10d61cb66f0';
 const CONVERSATION = 'b775eb28-f7d7-4edb-ab54-5cc6bb5fac64';
@@ -84,10 +84,47 @@ describe('ChatApi', () => {
     expect(received).toEqual(result);
   });
 
+  it('carries Gemini readiness and reply identity without sending credentials from the browser', () => {
+    const api = TestBed.inject(ChatApi);
+    let readiness: Health | undefined;
+    api.health().subscribe((result) => (readiness = result));
+    http.expectOne('/api/health').flush({ status: 'ok', database: 'ready', mode: 'gemini' });
+    expect(readiness?.mode).toBe('gemini');
+
+    const result: ChatResult = {
+      conversationId: CONVERSATION,
+      message: {
+        id: 'gemini-reply',
+        role: 'assistant',
+        content: 'नमस्कार!',
+        createdAt: '2026-10-28T12:00:00Z',
+      },
+      mode: 'gemini',
+      agentId: 'companion',
+      tools: [],
+    };
+    let reply: ChatResult | undefined;
+    api.send('नमस्कार').subscribe((value) => (reply = value));
+    const request = http.expectOne('/api/chat/message');
+    expect(request.request.body).toEqual({
+      message: 'नमस्कार',
+      conversationId: null,
+      agentId: 'companion',
+    });
+    expect(request.request.headers.has('Authorization')).toBe(false);
+    expect(request.request.headers.has('x-goog-api-key')).toBe(false);
+    request.flush(result);
+    expect(reply).toEqual(result);
+  });
+
   it('starts a conversation with a null conversation id', () => {
     TestBed.inject(ChatApi).send('Hello').subscribe();
     const request = http.expectOne('/api/chat/message');
-    expect(request.request.body).toEqual({ message: 'Hello', conversationId: null, agentId: 'companion' });
+    expect(request.request.body).toEqual({
+      message: 'Hello',
+      conversationId: null,
+      agentId: 'companion',
+    });
     request.flush({ conversationId: CONVERSATION, message: {}, mode: 'demo' });
   });
 
@@ -102,7 +139,9 @@ describe('ChatApi', () => {
       },
     ];
     let received: AgentDefinition[] | undefined;
-    TestBed.inject(ChatApi).agents().subscribe((response) => (received = response.agents));
+    TestBed.inject(ChatApi)
+      .agents()
+      .subscribe((response) => (received = response.agents));
     const request = http.expectOne('/api/agents');
     expect(request.request.method).toBe('GET');
     expect(request.request.headers.get('X-Dadus-Session')).toBe(SESSION);
@@ -135,7 +174,9 @@ describe('ChatApi', () => {
       tools: [{ name: 'create_plan', summary: 'Organized the request into three steps.' }],
     };
     let received: ChatResult | undefined;
-    TestBed.inject(ChatApi).send('Plan my day', null, 'planner').subscribe((response) => (received = response));
+    TestBed.inject(ChatApi)
+      .send('Plan my day', null, 'planner')
+      .subscribe((response) => (received = response));
     const request = http.expectOne('/api/chat/message');
     expect(request.request.body.agentId).toBe('planner');
     request.flush(result);

@@ -9,7 +9,7 @@ flowchart LR
   EF --> SQL[(SQL Server)]
   API --> Demo[Labelled development demo responder]
   API --> Agents[C# agent runner]
-  Agents -->|server-side HTTPS with configured key| Provider[OpenAI]
+  Agents -->|server-side HTTPS with selected provider key| Provider[Gemini or OpenAI]
   Agents --> Tools[Calculator and local-time tools]
 ```
 
@@ -21,17 +21,19 @@ User and assistant messages are saved together after a successful response. Fail
 
 ## Provider configuration
 
-`Chat:Mode` selects `Demo` or `OpenAI`. Demo is restricted to Development and visibly labelled. Live mode uses `DadusOpenAI:ApiKey` only in the server process and a configurable `DadusOpenAI:Model`. The default model is `gpt-4o-mini`; confirm availability for the configured account before depending on it. The integration calls the documented Chat Completions endpoint over HTTPS. Provider failures return a safe application error and do not expose raw provider responses or credentials.
+`Chat:Mode` selects `Demo`, `Gemini` or `OpenAI`. Demo is restricted to Development and visibly labelled. Gemini uses `DadusGemini:ApiKey` / `DadusGemini:Model` with Google's OpenAI-compatible Chat Completions endpoint; OpenAI uses `DadusOpenAI:ApiKey` / `DadusOpenAI:Model` with its own endpoint. Fixed provider profiles prevent keys being sent to an arbitrary configured URL. Keys stay in the server process, and only the selected provider is called. Model availability and Gemini free-tier eligibility depend on the configured account. Provider failures return safe application errors without raw provider bodies or credentials.
+
+Both providers use a shared bounded function-calling runner. OpenAI's existing request remains unchanged. The Gemini profile uses documented compatible fields and a reduced tool-schema vocabulary while retaining all tool validation on the .NET server. Gemini tool continuations retain only the opaque `extra_content.google.thought_signature` metadata needed by the provider; arbitrary extras and reasoning text are dropped. Signatures exist only for that in-memory run and never reach the browser, logs or persisted history.
 
 ## Runtime configuration
 
-ASP.NET Core reads its standard environment-variable syntax: `ConnectionStrings__Dadus`, `Chat__Mode`, `DadusOpenAI__ApiKey` and `DadusOpenAI__Model`. The application does not source `.env` files. The local SQL helper manages a generated development password and injects the connection string into child processes without printing it. The connection is loopback-only and trusts the local SQL Server development certificate; provider and dependency HTTPS verification remain enabled.
+ASP.NET Core reads its standard environment-variable syntax: `ConnectionStrings__Dadus`, `Chat__Mode`, `DadusOpenAI__ApiKey`, `DadusOpenAI__Model`, `DadusGemini__ApiKey` and `DadusGemini__Model`. The application does not source `.env` files. The local SQL helper manages a generated development password and injects the connection string into child processes without printing it. The connection is loopback-only and trusts the local SQL Server development certificate; provider and dependency HTTPS verification remain enabled.
 
 SQL Server data belongs in the named Docker volume, not source control. Live processes must be restarted in new cloud tasks. The cloud tool/cache activation helper lives outside this repository at `/workspace/.cloud-tools/chatbot-env.sh`.
 
 ## Optional SQLite development mode
 
-Setting `Database__Provider=Sqlite` explicitly enables a Development-only local database. It allows the demo to run while SQL Server's container download is blocked. The data file lives in the ignored `.local/` directory. This initial disposable schema uses `EnsureCreated`; SQL Server remains the default and uses the checked-in EF migrations. SQLite validation does not establish SQL Server readiness. Provider and database modes are independent: a demo responder can use either storage provider, and live OpenAI replies still require a real key.
+Setting `Database__Provider=Sqlite` explicitly enables a Development-only local database. It allows the demo to run while SQL Server's container download is blocked. The data file lives in the ignored `.local/` directory. This initial disposable schema uses `EnsureCreated`; SQL Server remains the default and uses the checked-in EF migrations. SQLite validation does not establish SQL Server readiness. Provider and database modes are independent: a demo responder can use either storage provider, and live provider replies still require the selected provider's real key.
 
 ## C# agents and tool calls
 

@@ -73,7 +73,7 @@
           connected()
             ? mode() === 'demo'
               ? 'Demo mode'
-              : 'OpenAI configured'
+              : modeLabel(mode()) + ' configured'
             : checkingConnection()
               ? 'Connecting…'
               : 'API unavailable'
@@ -95,7 +95,7 @@
         <span class="demo-tag">DEMO</span>
         <p>
           Try the chat flow with sample replies. Calculation and time tools still run. Connect
-          OpenAI for AI-generated responses.
+          Gemini or OpenAI for AI-generated responses.
         </p>
       </div>
     }
@@ -199,7 +199,7 @@
           <section class="last-run" aria-label="Latest response details" aria-live="polite">
             <div class="run-heading">
               <span class="eyebrow">LATEST RESPONSE</span><strong>{{ run.agentName }}</strong
-              ><span class="run-mode">{{ run.mode === 'demo' ? 'Demo' : 'OpenAI' }}</span>
+              ><span class="run-mode">{{ modeLabel(run.mode) }}</span>
             </div>
             @if (run.tools.length) {
               <ul class="tool-results">

@@ -23,7 +23,8 @@ internal sealed class DadusFactory(IChatResponder? responder = null, string mode
             {
                 ["ConnectionStrings:Dadus"] = "Server=unused;Database=unused;Integrated Security=true",
                 ["Chat:Mode"] = mode,
-                ["DadusOpenAI:ApiKey"] = ""
+                ["DadusOpenAI:ApiKey"] = "",
+                ["DadusGemini:ApiKey"] = ""
             }));
         builder.ConfigureServices(services =>
         {

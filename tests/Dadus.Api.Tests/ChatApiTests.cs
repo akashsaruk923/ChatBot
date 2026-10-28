@@ -161,14 +161,17 @@ public sealed class ChatApiTests
         Assert.Empty(conversations.GetProperty("conversations").EnumerateArray());
     }
 
-    [Fact]
-    public async Task LiveModeWithNoKeyReportsSetupErrorAndDoesNotPersist()
+    [Theory]
+    [InlineData("OpenAI")]
+    [InlineData("Gemini")]
+    [InlineData("gEmInI")]
+    public async Task LiveModeWithNoKeyReportsSetupErrorAndDoesNotPersist(string mode)
     {
-        using var factory = new DadusFactory(mode: "OpenAI");
+        using var factory = new DadusFactory(mode: mode);
         await factory.InitializeDatabaseAsync();
         using var client = factory.CreateSessionClient();
-        await AssertProblem(client.GetAsync("/api/health"), HttpStatusCode.ServiceUnavailable);
-        await AssertProblem(client.PostAsJsonAsync("/api/chat/message", new { message = "hello" }), HttpStatusCode.ServiceUnavailable);
+        await AssertProblem(client.GetAsync("/api/health"), HttpStatusCode.ServiceUnavailable, "key_missing");
+        await AssertProblem(client.PostAsJsonAsync("/api/chat/message", new { message = "hello" }), HttpStatusCode.ServiceUnavailable, "key_missing");
         var list = await GetJson(client, "/api/chat/conversations");
         Assert.Empty(list.GetProperty("conversations").EnumerateArray());
     }
@@ -314,13 +317,14 @@ public sealed class ChatApiTests
     private static async Task<JsonElement> ReadJson(HttpResponseMessage response) =>
         (await response.Content.ReadFromJsonAsync<JsonElement>()).Clone();
 
-    private static async Task AssertProblem(Task<HttpResponseMessage> request, HttpStatusCode expectedStatus)
+    private static async Task AssertProblem(Task<HttpResponseMessage> request, HttpStatusCode expectedStatus, string? expectedCode = null)
     {
         using var response = await request;
         Assert.Equal(expectedStatus, response.StatusCode);
         var problem = await ReadJson(response);
         Assert.Equal((int)expectedStatus, problem.GetProperty("status").GetInt32());
         Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("code").GetString()));
+        if (expectedCode is not null) Assert.Equal(expectedCode, problem.GetProperty("code").GetString());
         Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("title").GetString()));
     }
 }

@@ -175,6 +175,13 @@ export class App implements OnInit {
     );
   }
 
+  modeLabel(mode: ChatMode | null): string {
+    if (mode === 'demo') return 'Demo';
+    if (mode === 'gemini') return 'Gemini';
+    if (mode === 'openai') return 'OpenAI';
+    return 'AI provider';
+  }
+
   private refreshConversations(): void {
     const version = ++this.conversationListVersion;
     this.api
@@ -437,13 +444,13 @@ export class App implements OnInit {
           case 'key_missing':
             return {
               message:
-                'OpenAI access is not configured. Configure the server API key, or use Development demo mode, restart the API, then reconnect.',
+                'AI access is not configured. Configure the server API key for the selected provider, or use Development demo mode, restart the API, then reconnect.',
               code: 'key_missing',
             };
           case 'demo_not_allowed':
             return {
               message:
-                'Demo mode is available only in Development. Start the local API in Development, or configure OpenAI for this environment, then reconnect.',
+                'Demo mode is available only in Development. Start the local API in Development, or configure Gemini or OpenAI for this environment, then reconnect.',
               code: 'demo_not_allowed',
             };
         }
@@ -469,37 +476,43 @@ export class App implements OnInit {
         typeof value['title'] === 'string' &&
         typeof value['detail'] === 'string'
       ) {
+        if (
+          this.mode() === 'gemini' &&
+          (value['code'] === 'provider_quota_exceeded' || value['code'] === 'provider_rate_limited')
+        ) {
+          return 'Gemini free-tier quota or rate limit was reached. Check Google AI Studio limits and retry when the allowance resets. Your draft is still here.';
+        }
         const guidance: Record<string, string> = {
           key_missing:
-            'OpenAI access is not configured. Set the API key in the backend, restart it, then reconnect. Your draft is still here.',
+            'AI access is not configured. Set the API key in the backend for the selected provider, restart it, then reconnect. Your draft is still here.',
           provider_authentication_failed:
-            'OpenAI rejected the backend API key. Check or replace it in the backend settings, restart the API, then retry. Your draft is still here.',
+            'The AI provider rejected the backend API key. Check or replace it in the backend settings, restart the API, then retry. Your draft is still here.',
           provider_access_denied:
-            'OpenAI denied access. Check the API project and model permissions, then retry. Your draft is still here.',
+            'The AI provider denied access. Check the API project and model permissions, then retry. Your draft is still here.',
           provider_quota_exceeded:
-            'OpenAI API quota is exhausted. Check API billing, available credit and project spending limits, then retry. Your draft is still here.',
+            'The AI provider quota is exhausted. Check available quota, API billing and project limits, then retry. Your draft is still here.',
           provider_rate_limited:
-            'OpenAI is receiving too many requests. Wait a little, then retry. Your draft is still here.',
+            'The AI provider is receiving too many requests. Wait a little, then retry. Your draft is still here.',
           provider_model_unavailable:
-            'The configured OpenAI model is unavailable to this project. Check the backend model setting and project access, then retry. Your draft is still here.',
+            'The configured AI model is unavailable to this project. Check the backend model setting and project access, then retry. Your draft is still here.',
           provider_unavailable:
-            'OpenAI is unavailable. Check the backend internet connection and try again shortly. Your draft is still here.',
+            'The AI provider is unavailable. Check the backend internet connection and try again shortly. Your draft is still here.',
           provider_timeout:
-            'OpenAI took too long to reply. Please retry. Your draft is still here.',
+            'The AI provider took too long to reply. Please retry. Your draft is still here.',
           provider_failed:
-            'OpenAI rejected the request. Check the backend API key, model access and API billing, then retry. Your draft is still here.',
+            'The AI provider rejected the request. Check the backend API key, model access and provider quota, then retry. Your draft is still here.',
           invalid_provider_response:
-            'OpenAI returned an unusable response. Please retry. Your draft is still here.',
+            'The AI provider returned an unusable response. Please retry. Your draft is still here.',
           incomplete_provider_response:
-            'OpenAI did not finish its reply. Please retry with a smaller request. Your draft is still here.',
+            'The AI provider did not finish its reply. Please retry with a smaller request. Your draft is still here.',
           agent_limit_exceeded:
             'The agent reached its tool-use limit. Please try a smaller request. Your draft is still here.',
           database_unavailable:
             'Conversation storage is unavailable. Check SQL Server and run the database migrations before retrying. Your draft is still here.',
           demo_not_allowed:
-            'Demo mode requires Development. Start the backend in Development or configure OpenAI, then reconnect.',
+            'Demo mode requires Development. Start the backend in Development or configure Gemini or OpenAI, then reconnect.',
           invalid_chat_mode:
-            'The backend chat mode is invalid. Select Demo or OpenAI, restart the API, then reconnect.',
+            'The backend chat mode is invalid. Select Demo, Gemini or OpenAI, restart the API, then reconnect.',
           invalid_message: 'Enter a message between 1 and 4,000 characters.',
           invalid_agent: 'Choose one of the available agents, then retry.',
           invalid_request: 'The request could not be accepted. Check your message and try again.',

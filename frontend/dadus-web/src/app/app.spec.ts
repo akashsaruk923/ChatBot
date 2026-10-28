@@ -145,6 +145,7 @@ describe('DADUS chat', () => {
     expect(element.textContent).toContain('बोल भावा!');
     expect(element.querySelector('h2')?.textContent).toContain('काय म्हणतोस?');
     expect(element.querySelector('.demo-banner')?.textContent).toContain('sample replies');
+    expect(element.querySelector('.demo-banner')?.textContent).toContain('Gemini or OpenAI');
     expect(element.querySelector('.connection')?.textContent).toContain('Demo mode');
     expect(element.textContent).toContain('not a live AI model');
   });
@@ -167,6 +168,125 @@ describe('DADUS chat', () => {
     expect(element.querySelectorAll('.message')).toHaveLength(2);
     expect(element.querySelector('textarea')?.disabled).toBe(false);
     expect(app.conversationId()).toBe(CONVERSATION.id);
+  });
+
+  it('identifies Gemini configuration without claiming that a live model request has succeeded', async () => {
+    api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'gemini' }));
+    app.checkConnection();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.mode()).toBe('gemini');
+    expect(element.querySelector('.connection')?.textContent).toContain('Gemini configured');
+    expect(element.querySelector('.connection')?.textContent).not.toContain('OpenAI');
+    expect(element.querySelector('.demo-banner')).toBeNull();
+    expect(api.send).not.toHaveBeenCalled();
+  });
+
+  it('labels a Gemini reply correctly and keeps opt-in reading available', async () => {
+    api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'openai' }));
+    app.checkConnection();
+    const geminiReply: ChatResult = {
+      ...answer,
+      mode: 'gemini',
+      agentId: 'companion',
+      message: { ...answer.message, content: 'नमस्कार! आपण मराठीत गप्पा मारूया.' },
+    };
+    api.send.mockReturnValue(of(geminiReply));
+    voice.readReplies.set(true);
+    await compose('मराठीत बोलूया');
+    await submit();
+    expect(api.send).toHaveBeenCalledWith('मराठीत बोलूया', null, 'companion');
+    expect(app.mode()).toBe('gemini');
+    expect(element.querySelector('.connection')?.textContent).toContain('Gemini configured');
+    expect(element.querySelector('.run-mode')?.textContent).toBe('Gemini');
+    expect(element.querySelector('.message-feed')?.textContent).toContain(
+      geminiReply.message.content,
+    );
+    expect(voice.readReply).toHaveBeenCalledWith(geminiReply.message.content);
+  });
+
+  it('gives provider-neutral guidance for a rejected Gemini key and preserves the draft', async () => {
+    api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'gemini' }));
+    app.checkConnection();
+    api.send.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 502,
+            error: {
+              status: 502,
+              title: 'Service unavailable',
+              code: 'provider_authentication_failed',
+              detail: 'PRIVATE_PROVIDER_DETAIL OpenAI',
+            },
+          }),
+      ),
+    );
+    await compose('माझ्याशी बोल');
+    await submit();
+    const error = element.querySelector('.error-banner')!;
+    expect(error.textContent).toContain('The AI provider rejected the backend API key');
+    expect(error.textContent).not.toContain('OpenAI');
+    expect(error.textContent).not.toContain('PRIVATE_PROVIDER_DETAIL');
+    expect(app.draft()).toBe('माझ्याशी बोल');
+    expect(app.messages()).toEqual([]);
+  });
+
+  it.each(['provider_quota_exceeded', 'provider_rate_limited'])(
+    'explains Gemini free-tier limits for %s without suggesting a billing upgrade',
+    async (code) => {
+      api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'gemini' }));
+      app.checkConnection();
+      api.send.mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 502,
+              error: {
+                status: 502,
+                title: 'Service unavailable',
+                code,
+                detail: 'PRIVATE_PROVIDER_QUOTA_BODY',
+              },
+            }),
+        ),
+      );
+      await compose('आपण गप्पा मारूया');
+      await submit();
+      const error = element.querySelector('.error-banner')!;
+      expect(error.textContent).toContain('Gemini free-tier quota or rate limit was reached');
+      expect(error.textContent).toContain('Google AI Studio limits');
+      expect(error.textContent).toContain('retry when the allowance resets');
+      expect(error.textContent).not.toMatch(/billing|upgrade|OpenAI|PRIVATE_PROVIDER_QUOTA_BODY/i);
+      expect(app.draft()).toBe('आपण गप्पा मारूया');
+      expect(app.messages()).toEqual([]);
+    },
+  );
+
+  it('does not guess a provider when readiness reports a missing key before mode is known', async () => {
+    app.mode.set(null);
+    api.health.mockReturnValue(
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 503,
+            error: {
+              status: 503,
+              title: 'Service unavailable',
+              code: 'key_missing',
+              detail: 'PRIVATE_GEMINI_KEY',
+            },
+          }),
+      ),
+    );
+    app.checkConnection();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const banner = element.querySelector('.connection-banner')!;
+    expect(banner.textContent).toContain('server API key for the selected provider');
+    expect(banner.textContent).not.toContain('OpenAI');
+    expect(banner.textContent).not.toContain('Gemini');
+    expect(banner.textContent).not.toContain('PRIVATE_GEMINI_KEY');
   });
 
   it('restores a failed draft and resubmits it without duplicate user messages', async () => {
@@ -793,7 +913,7 @@ describe('DADUS chat', () => {
     { code: 'provider_rate_limited', expected: 'Wait a little' },
     { code: 'provider_model_unavailable', expected: 'backend model setting' },
     { code: 'provider_unavailable', expected: 'backend internet connection' },
-    { code: 'provider_failed', expected: 'backend API key, model access and API billing' },
+    { code: 'provider_failed', expected: 'backend API key, model access and provider quota' },
   ])(
     'explains $code without exposing provider details or losing the draft',
     async ({ code, expected }) => {

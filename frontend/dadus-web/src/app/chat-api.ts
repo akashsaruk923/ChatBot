@@ -2,7 +2,7 @@ import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
-export type ChatMode = 'demo' | 'openai';
+export type ChatMode = 'demo' | 'openai' | 'gemini';
 export type AgentId = 'companion' | 'planner' | 'coding';
 
 export interface AgentDefinition {

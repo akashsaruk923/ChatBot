@@ -2,7 +2,7 @@
 
 A local chat and AI-agent starter for DADUS AI: Angular UI, ASP.NET Core 8 / C# agents, EF Core 8 and SQL Server. The interface supports Unicode text in Marathi, Hindi, English and mixed language, with optional browser microphone dictation and spoken replies. Replies and tool summaries are escaped plain text.
 
-Development starts in **Demo** mode. Demo replies are deterministic, visibly labelled, and do not call an AI model. OpenAI replies require a server-side key. This starter is for local development: anonymous browser sessions are separated, but account authentication is required before deployment. Real-time voice conversations, wake-word recognition, personal memory, reminders and mobile clients are later milestones.
+Development starts in **Demo** mode. Demo replies are deterministic, visibly labelled, and do not call an AI model. Gemini and OpenAI replies require the selected provider's server-side key. This starter is for local development: anonymous browser sessions are separated, but account authentication is required before deployment. Real-time voice conversations, wake-word recognition, personal memory, reminders and mobile clients are later milestones.
 
 ## Prerequisites
 
@@ -50,6 +50,33 @@ If you already have SQL Server, set `ConnectionStrings__Dadus` in your process e
 
 The cloud network needs `mcr.microsoft.com` and Microsoft's regional image host `eastus.data.mcr.microsoft.com` for this pinned image. A saved network draft must be applied through environment settings before a blocked download can work. SQL Server integration must be validated separately if its image cannot be downloaded.
 
+## Use Google Gemini with a free-tier project
+
+1. Open [Google AI Studio's API key page](https://aistudio.google.com/app/apikey), sign in and create a Gemini API key for your project. Check the model's free-tier eligibility and quota in AI Studio; unlimited free access is not promised. A ChatGPT subscription or OpenAI key is unnecessary for Gemini mode.
+2. In Visual Studio, right-click **Dadus.Api → Manage User Secrets**. Add the following section to the local JSON, preserving other settings, and replace the placeholder locally:
+
+   ```json
+   {
+     "DadusGemini": {
+       "ApiKey": "PASTE_YOUR_GEMINI_KEY_LOCALLY"
+     }
+   }
+   ```
+
+3. Stop the running backend with Ctrl+C or Visual Studio's Shift+F5. In the same **CMD** window that has your working SQL settings, run from the repository root:
+
+   ```bat
+   set "ASPNETCORE_ENVIRONMENT=Development"
+   set "Chat__Mode=Gemini"
+   dotnet run --project backend\Dadus.Api --no-launch-profile --urls http://127.0.0.1:5088
+   ```
+
+4. Keep Angular running, reconnect the UI and send a short message. The status and response badge should show **Gemini**. A browser refresh alone does not rebuild or restart the backend. Do not use `--no-build` after updating the provider code or initializing User Secrets.
+
+The .NET agent loop calls Google's [OpenAI-compatible endpoint](https://github.com/google-gemini/cookbook/blob/main/quickstarts/Get_started_OpenAI_Compatibility.ipynb) at `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`. `DadusGemini__Model` defaults to `gemini-3.8-flash`, matching the current official cookbook example. Model availability and free-tier eligibility are determined by your Google project; if AI Studio offers a different eligible model, set its exact API model ID with `DadusGemini__Model` or `DadusGemini:Model` in User Secrets. The model example is not a pricing guarantee.
+
+The Gemini key is separate from `DadusOpenAI:ApiKey`; do not paste a Gemini key into the OpenAI setting. Keys remain on the .NET server. In cloud settings, the corresponding secret variable is `DadusGemini__ApiKey`, with HTTPS access to `generativelanguage.googleapis.com`. Gemini quota/rate failures prompt you to check free-tier allowance and wait for it to reset; the app does not enable paid billing or automatically switch providers. A configured-key health status does not validate a real model call. Mocked provider tests do not establish live Gemini access.
+
 ## Enable real OpenAI replies
 
 Configure `DadusOpenAI__ApiKey` securely in environment settings or the server process, allow HTTPS to `api.openai.com`, set `Chat__Mode=OpenAI`, and restart the API. `DadusOpenAI__Model` defaults to `gpt-4o-mini`; model availability depends on the account. The server uses the Chat Completions endpoint and disables response storage through `store=false`. This does not promise zero provider retention; check the provider's applicable data policy.
@@ -74,9 +101,9 @@ Failed provider requests show fixed recovery guidance and preserve the draft:
 | --- | --- |
 | `provider_authentication_failed` | Replace the rejected backend API key in the local secret store. |
 | `provider_access_denied` | Check the API project's permissions and model access. |
-| `provider_quota_exceeded` | Check API billing, available credits and project limits. |
+| `provider_quota_exceeded` | Check the selected provider's quota and project limits. For Gemini free tier, wait for allowance to reset; for OpenAI, check API billing and credits. |
 | `provider_rate_limited` | Wait before retrying; check the project's API rate limits. |
-| `provider_model_unavailable` | Check `DadusOpenAI__Model` against models available to the project. |
+| `provider_model_unavailable` | Check the selected provider's `DadusGemini__Model` or `DadusOpenAI__Model` against models available to its project. |
 | `provider_unavailable` | Check connectivity or retry when the provider recovers. |
 
 The application never displays the raw provider error body or key. These diagnostics do not validate live access without a successful real chat request.

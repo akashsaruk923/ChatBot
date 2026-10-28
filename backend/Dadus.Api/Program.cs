@@ -37,6 +37,7 @@ builder.Services.AddDbContext<DadusDbContext>(options =>
 });
 builder.Services.AddSingleton<ConversationLocks>();
 builder.Services.AddHttpClient<OpenAiChatResponder>(client => client.Timeout = TimeSpan.FromSeconds(45));
+builder.Services.AddHttpClient<GeminiChatResponder>(client => client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddScoped<IChatResponder>(services =>
 {
     var mode = builder.Configuration["Chat:Mode"] ?? "OpenAI";
@@ -46,9 +47,11 @@ builder.Services.AddScoped<IChatResponder>(services =>
             throw new ChatFailure(503, "demo_not_allowed", "Demo mode is available only in the Development environment.");
         return new DemoChatResponder();
     }
-    if (!string.Equals(mode, "OpenAI", StringComparison.OrdinalIgnoreCase))
-        throw new ChatFailure(503, "invalid_chat_mode", "The chat server configuration needs attention.");
-    return services.GetRequiredService<OpenAiChatResponder>();
+    if (string.Equals(mode, "OpenAI", StringComparison.OrdinalIgnoreCase))
+        return services.GetRequiredService<OpenAiChatResponder>();
+    if (string.Equals(mode, "Gemini", StringComparison.OrdinalIgnoreCase))
+        return services.GetRequiredService<GeminiChatResponder>();
+    throw new ChatFailure(503, "invalid_chat_mode", "Select Demo, OpenAI or Gemini in the backend chat configuration.");
 });
 builder.Services.AddRateLimiter(options =>
 {
@@ -107,8 +110,14 @@ app.MapGet("/api/health", async (DadusDbContext db, IChatResponder responder, Ca
     // A connection alone is insufficient: required tables must exist after migration.
     _ = await db.Conversations.AnyAsync(cancellationToken);
     _ = await db.Messages.AnyAsync(cancellationToken);
-    if (responder.Mode == "openai" && string.IsNullOrWhiteSpace(builder.Configuration["DadusOpenAI:ApiKey"]))
-        throw new ChatFailure(503, "key_missing", "OpenAI access is not configured. Configure the server API key or select Development demo mode.");
+    var keySetting = responder.Mode switch
+    {
+        "openai" => "DadusOpenAI:ApiKey",
+        "gemini" => "DadusGemini:ApiKey",
+        _ => null
+    };
+    if (keySetting is not null && string.IsNullOrWhiteSpace(builder.Configuration[keySetting]))
+        throw new ChatFailure(503, "key_missing", "The selected AI provider's server API key is missing. Configure it or select Development demo mode.");
     return Results.Ok(new { status = "ok", mode = responder.Mode, database = "ready" });
 });
 
