@@ -415,6 +415,9 @@ export class App implements OnInit {
       this.voice.stopListening();
       return;
     }
+    // A microphone action also opts into spoken replies; the checkbox can
+    // still disable reading before or while waiting for the response.
+    this.voice.setReadReplies(true);
     const version = this.selectionVersion;
     this.readingMessageId.set(null);
     this.voice.startListening((transcript) => {
