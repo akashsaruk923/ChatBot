@@ -259,7 +259,7 @@
           [ngModel]="draft()"
           (ngModelChange)="draft.set($event)"
           (keydown)="onComposerKeydown($event)"
-          [disabled]="sending() || loadingHistory()"
+          [disabled]="sending() || loadingHistory() || voiceChatFinishing()"
           maxlength="4000"
           [placeholder]="composerPlaceholder()"
           aria-describedby="composer-help language-help"
@@ -270,7 +270,9 @@
               class="mic-button"
               type="button"
               [class.listening]="voice.listening()"
-              [disabled]="!voice.recognitionSupported || sending() || loadingHistory()"
+              [disabled]="
+                !voice.recognitionSupported || sending() || loadingHistory() || voiceChatActive()
+              "
               [attr.aria-pressed]="voice.listening()"
               aria-describedby="voice-help"
               (click)="toggleDictation()"
@@ -325,6 +327,33 @@
         </div>
       </form>
       <div class="speech-toolbar" aria-label="Speech playback controls">
+        @if (voiceChatActive()) {
+          <button
+            class="read-reply finish-voice-chat"
+            type="button"
+            [disabled]="voiceChatFinishing()"
+            (click)="finishVoiceChat()"
+          >
+            {{ voiceChatFinishing() ? 'Finishing…' : 'Finish & send' }}
+          </button>
+          <button class="stop-reading cancel-voice-chat" type="button" (click)="cancelVoiceChat()">
+            Cancel voice chat
+          </button>
+        } @else {
+          <button
+            class="read-reply start-voice-chat"
+            type="button"
+            [disabled]="
+              !voice.recognitionSupported ||
+              !voice.synthesisSupported ||
+              sending() ||
+              loadingHistory()
+            "
+            (click)="startVoiceChat()"
+          >
+            Voice chat
+          </button>
+        }
         <label class="read-replies-toggle"
           ><input
             type="checkbox"
@@ -348,6 +377,29 @@
       </div>
       <div class="voice-help" id="voice-help">
         <p id="language-help">{{ languageHelp() }}</p>
+        <p>
+          Voice chat: speak, then choose Finish &amp; send to hear the reply. Mic only adds words to
+          your draft.
+        </p>
+        @if (voice.interimTranscript()) {
+          <p class="voice-status" aria-live="off">Hearing: {{ voice.interimTranscript() }}</p>
+        }
+        @if (voice.speechVoices().length) {
+          <label class="speech-voice-picker voice-language" for="speech-voice"
+            >Voice
+            <select
+              id="speech-voice"
+              [value]="voice.selectedSpeechVoice()"
+              [disabled]="voiceChatFinishing()"
+              (change)="changeSpeechVoice($any($event.target).value)"
+            >
+              <option value="auto">Auto · match language</option>
+              @for (speechVoice of voice.speechVoices(); track speechVoice.value) {
+                <option [value]="speechVoice.value">{{ speechVoice.label }}</option>
+              }
+            </select>
+          </label>
+        }
         <p id="voice-availability" role="status">{{ voice.voiceAvailability() }}</p>
         @if (!voice.recognitionSupported) {
           <p>

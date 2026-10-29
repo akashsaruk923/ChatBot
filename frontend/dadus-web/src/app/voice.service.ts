@@ -40,6 +40,17 @@ interface SpeechRequest {
   readonly language: VoiceLanguage;
 }
 
+interface DictationSession {
+  readonly version: number;
+  readonly onFinalTranscript: (text: string) => void;
+  readonly onFinished?: () => void;
+  receivedText: boolean;
+  lostInterim: boolean;
+  emptyEnds: number;
+  stopping: boolean;
+  userStopped: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class VoiceService {
   private readonly destroyRef = inject(DestroyRef);
@@ -56,6 +67,10 @@ export class VoiceService {
   private voiceLoadTimer: ReturnType<typeof setTimeout> | null = null;
   private speechStartTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSpeech: SpeechRequest | null = null;
+  private dictation: DictationSession | null = null;
+  private recognitionRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private recognitionSessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private recognitionStopTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly voicesChanged = () => {
     if (this.destroyed) return;
     if (this.refreshVoices().length) {
@@ -73,6 +88,14 @@ export class VoiceService {
     { value: 'en-IN', label: 'English' },
   ];
   readonly language = signal<VoiceLanguage>('mr-IN');
+  readonly interimTranscript = signal('');
+  readonly selectedSpeechVoice = signal('auto');
+  readonly speechVoices = computed(() =>
+    this.availableVoices().map((voice) => ({
+      value: this.voiceKey(voice),
+      label: `${voice.name} (${voice.lang})`,
+    })),
+  );
   readonly listening = signal(false);
   readonly speaking = signal(false);
   readonly preparingSpeech = signal(false);
@@ -84,6 +107,12 @@ export class VoiceService {
     if (!this.synthesisSupported) return 'Speech playback is not supported in this browser.';
     const voice = this.findVoice(this.language());
     const label = this.languageLabel(this.language());
+    if (this.selectedSpeechVoice() !== 'auto')
+      return voice
+        ? `Selected speech voice: ${voice.name} (${voice.lang}). AI replies and microphone stay in ${label}.`
+        : 'The selected speech voice is unavailable. Choose another available voice or Auto.';
+    if (voice && this.language() === 'mr-IN' && this.voiceLanguage(voice) === 'hi')
+      return `No Marathi voice is installed. Using Hindi voice: ${voice.name} (${voice.lang}); Marathi pronunciation may differ.`;
     if (voice) return `${label} voice available: ${voice.name} (${voice.lang}).`;
     if (this.checkingVoice()) return 'Loading available browser speech voices…';
     if (!this.availableVoices().length)
@@ -116,7 +145,15 @@ export class VoiceService {
     if (!enabled) this.stopSpeaking();
   }
 
-  startListening(onFinalTranscript: (text: string) => void): void {
+  setSpeechVoice(value: string): void {
+    if (value !== 'auto' && !this.availableVoices().some((voice) => this.voiceKey(voice) === value))
+      return;
+    this.stopSpeaking();
+    this.selectedSpeechVoice.set(value);
+    this.error.set('');
+  }
+
+  startListening(onFinalTranscript: (text: string) => void, onFinished?: () => void): void {
     if (this.destroyed || this.listening()) return;
     this.error.set('');
     this.status.set('');
@@ -128,11 +165,33 @@ export class VoiceService {
     }
 
     this.stopSpeaking();
-    const version = ++this.recognitionVersion;
+    const session: DictationSession = {
+      version: ++this.recognitionVersion,
+      onFinalTranscript,
+      onFinished,
+      receivedText: false,
+      lostInterim: false,
+      emptyEnds: 0,
+      stopping: false,
+      userStopped: false,
+    };
+    this.dictation = session;
+    this.interimTranscript.set('');
+    this.listening.set(true);
+    this.recognitionSessionTimer = setTimeout(
+      () => this.requestRecognitionStop(session, false),
+      120000,
+    );
+    this.openRecognition(session);
+  }
+
+  private openRecognition(session: DictationSession): void {
+    if (!this.isCurrentSession(session) || session.stopping || !this.recognitionConstructor) return;
     let recognition: BrowserRecognition;
     try {
       recognition = new this.recognitionConstructor();
     } catch {
+      this.finishRecognition(session);
       this.error.set(
         'Voice typing could not start. Try another supported browser or type your message.',
       );
@@ -140,16 +199,15 @@ export class VoiceService {
     }
     this.recognition = recognition;
     recognition.lang = this.language();
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true;
+    recognition.interimResults = true;
     const deliveredResults = new Set<number>();
-    let receivedText = false;
-    const current = () =>
-      !this.destroyed && this.recognition === recognition && this.recognitionVersion === version;
+    let receivedRunText = false;
+    const current = () => this.isCurrentSession(session) && this.recognition === recognition;
 
     recognition.onstart = () => {
       if (!current()) return;
-      this.status.set('Listening… Speak, then review the text before sending.');
+      this.status.set('Listening… Keep speaking, then press Stop when you are finished.');
     };
     recognition.onresult = (event) => {
       if (!current()) return;
@@ -162,33 +220,67 @@ export class VoiceService {
         if (text) parts.push(text);
       }
       if (parts.length) {
-        receivedText = true;
-        onFinalTranscript(parts.join(' '));
+        receivedRunText = true;
+        session.receivedText = true;
+        session.onFinalTranscript(parts.join(' '));
       }
+      if (!current()) return;
+      const interim: string[] = [];
+      for (let index = 0; index < event.results.length; index++) {
+        const result = event.results[index];
+        if (!result.isFinal) {
+          const text = result[0]?.transcript?.trim();
+          if (text) interim.push(text);
+        }
+      }
+      let preview = interim.join(' ').slice(0, 4000);
+      if (/[\uD800-\uDBFF]$/.test(preview)) preview = preview.slice(0, -1);
+      this.interimTranscript.set(preview);
     };
     recognition.onerror = (event) => {
       if (!current()) return;
+      // Chrome commonly reports no-speech before ending a quiet recognition run.
+      // Its onend handler can restart this explicitly opened, bounded session.
+      if (event.error === 'no-speech') {
+        if (this.interimTranscript().trim()) session.lostInterim = true;
+        this.status.set('Still listening… Speak when you are ready, or press Stop.');
+        return;
+      }
+      session.userStopped = false;
+      this.finishRecognition(session);
       this.error.set(this.recognitionError(event.error));
       this.status.set('');
-      this.releaseRecognition(recognition);
-      this.abortRecognition(recognition);
     };
     recognition.onend = () => {
       if (!current()) return;
       this.releaseRecognition(recognition);
-      this.status.set(
-        receivedText
-          ? 'Voice typing finished. Review your message, then send.'
-          : 'No speech was captured. Try again, or type your message.',
-      );
+      if (session.stopping) {
+        this.finishRecognition(session);
+        return;
+      }
+      // A browser run may end before its tentative tail becomes final. Later
+      // runs cannot prove those words were recovered, so do not auto-send them.
+      if (this.interimTranscript().trim()) session.lostInterim = true;
+      this.interimTranscript.set('');
+      session.emptyEnds = receivedRunText ? 0 : session.emptyEnds + 1;
+      if (session.emptyEnds >= 3) {
+        this.finishRecognition(session);
+        this.error.set(
+          'No speech was captured after several attempts. Your text is kept; click Mic to continue, or type your message.',
+        );
+        return;
+      }
+      this.status.set('Still listening… Continue speaking, or press Stop when finished.');
+      this.recognitionRestartTimer = setTimeout(() => {
+        this.recognitionRestartTimer = null;
+        this.openRecognition(session);
+      }, 250);
     };
-    this.listening.set(true);
     this.status.set('Starting microphone… Allow microphone access if prompted.');
     try {
       recognition.start();
     } catch {
-      this.releaseRecognition(recognition);
-      this.abortRecognition(recognition);
+      this.finishRecognition(session);
       this.status.set('');
       this.error.set(
         'The microphone could not start. Check browser microphone permission and try again.',
@@ -197,9 +289,29 @@ export class VoiceService {
   }
 
   stopListening(): void {
+    if (this.dictation) this.requestRecognitionStop(this.dictation, true);
+  }
+
+  private requestRecognitionStop(session: DictationSession, userStopped: boolean): void {
+    if (!this.isCurrentSession(session) || session.stopping) return;
+    session.stopping = true;
+    session.userStopped = userStopped;
+    if (this.recognitionSessionTimer !== null) clearTimeout(this.recognitionSessionTimer);
+    this.recognitionSessionTimer = null;
+    if (this.recognitionRestartTimer !== null) clearTimeout(this.recognitionRestartTimer);
+    this.recognitionRestartTimer = null;
     const recognition = this.recognition;
-    if (!recognition) return;
-    this.status.set('Finishing microphone input…');
+    this.status.set(
+      userStopped
+        ? 'Finishing microphone input…'
+        : 'The two-minute listening limit was reached. Finishing your text…',
+    );
+    if (!recognition) {
+      this.finishRecognition(session);
+      return;
+    }
+    // Keep finals that Chrome delivers during stop, but never wait indefinitely.
+    this.recognitionStopTimer = setTimeout(() => this.finishRecognition(session), 1500);
     try {
       // stop() lets the browser deliver its final transcript before onend.
       recognition.stop();
@@ -211,12 +323,58 @@ export class VoiceService {
   cancelListening(): void {
     const recognition = this.recognition;
     ++this.recognitionVersion;
+    this.dictation = null;
+    this.clearRecognitionTimers();
     if (recognition) {
       this.releaseRecognition(recognition);
       this.abortRecognition(recognition);
     }
     this.listening.set(false);
+    this.interimTranscript.set('');
     this.status.set('');
+  }
+
+  private isCurrentSession(session: DictationSession): boolean {
+    return (
+      !this.destroyed && this.dictation === session && this.recognitionVersion === session.version
+    );
+  }
+
+  private finishRecognition(session: DictationSession): void {
+    if (!this.isCurrentSession(session)) return;
+    const hasUnconfirmedTail =
+      session.userStopped && (session.lostInterim || !!this.interimTranscript().trim());
+    const recognition = this.recognition;
+    this.dictation = null;
+    ++this.recognitionVersion;
+    this.clearRecognitionTimers();
+    if (recognition) {
+      this.releaseRecognition(recognition);
+      this.abortRecognition(recognition);
+    }
+    this.listening.set(false);
+    this.interimTranscript.set('');
+    this.status.set(
+      session.stopping && !session.userStopped
+        ? 'The two-minute listening limit was reached. Your text is kept; review it or click Mic to continue.'
+        : session.receivedText
+          ? 'Voice typing finished. Review your message, then send.'
+          : 'No speech was captured. Try again, or type your message.',
+    );
+    if (hasUnconfirmedTail) {
+      this.error.set(
+        'The browser could not confirm the last spoken words. Your confirmed text is kept; review your draft before sending.',
+      );
+    } else if (session.userStopped) session.onFinished?.();
+  }
+
+  private clearRecognitionTimers(): void {
+    if (this.recognitionRestartTimer !== null) clearTimeout(this.recognitionRestartTimer);
+    if (this.recognitionSessionTimer !== null) clearTimeout(this.recognitionSessionTimer);
+    if (this.recognitionStopTimer !== null) clearTimeout(this.recognitionStopTimer);
+    this.recognitionRestartTimer = null;
+    this.recognitionSessionTimer = null;
+    this.recognitionStopTimer = null;
   }
 
   readReply(text: string): void {
@@ -285,7 +443,6 @@ export class VoiceService {
     recognition.onerror = null;
     recognition.onend = null;
     if (this.recognition === recognition) this.recognition = null;
-    this.listening.set(false);
   }
 
   private abortRecognition(recognition: BrowserRecognition): void {
@@ -338,12 +495,30 @@ export class VoiceService {
   }
 
   private findVoice(language: VoiceLanguage): SpeechSynthesisVoice | undefined {
+    const selected = this.selectedSpeechVoice();
+    if (selected !== 'auto')
+      return this.availableVoices().find((voice) => this.voiceKey(voice) === selected);
     return (
-      this.availableVoices().find((voice) => voice.lang.toLowerCase() === language.toLowerCase()) ??
-      this.availableVoices().find(
-        (voice) => voice.lang.toLowerCase().split('-')[0] === language.split('-')[0],
-      )
+      this.matchingVoice(language) ??
+      (language === 'mr-IN' ? this.matchingVoice('hi-IN') : undefined)
     );
+  }
+
+  private matchingVoice(language: VoiceLanguage): SpeechSynthesisVoice | undefined {
+    return (
+      this.availableVoices().find(
+        (voice) => voice.lang.toLowerCase().replace('_', '-') === language.toLowerCase(),
+      ) ??
+      this.availableVoices().find((voice) => this.voiceLanguage(voice) === language.split('-')[0])
+    );
+  }
+
+  private voiceKey(voice: SpeechSynthesisVoice): string {
+    return voice.voiceURI || `${voice.name}:${voice.lang}`;
+  }
+
+  private voiceLanguage(voice: SpeechSynthesisVoice): string {
+    return voice.lang.toLowerCase().replace('_', '-').split('-')[0];
   }
 
   private languageLabel(language: VoiceLanguage): string {
@@ -360,9 +535,11 @@ export class VoiceService {
       this.status.set('');
       const label = this.languageLabel(pending.language);
       this.error.set(
-        this.availableVoices().length
-          ? `No ${label} speech voice is available in this browser. Choose a language with an available voice, or check browser and Windows support for ${label} speech.`
-          : 'No browser speech voices loaded. Check Windows speech voice settings, then click Test voice to try again.',
+        this.selectedSpeechVoice() !== 'auto'
+          ? 'The selected speech voice is unavailable. Choose another available voice or Auto, then try Test voice.'
+          : this.availableVoices().length
+            ? `No ${label} speech voice is available in this browser. Choose a language with an available voice, or check browser and Windows support for ${label} speech.`
+            : 'No browser speech voices loaded. Check Windows speech voice settings, then click Test voice to try again.',
       );
       return;
     }
@@ -389,7 +566,9 @@ export class VoiceService {
       );
       return;
     }
-    utterance.lang = pending.language;
+    // The chosen engine's actual locale matters when a Hindi voice reads Marathi
+    // or the user explicitly selects a different installed voice.
+    utterance.lang = voice.lang;
     utterance.voice = voice;
     this.utterance = utterance;
     const current = () =>
@@ -402,7 +581,9 @@ export class VoiceService {
       this.status.set(
         voice.lang.toLowerCase() === pending.language.toLowerCase()
           ? 'Reading the reply…'
-          : `Reading with a ${this.languageLabel(pending.language)} voice (${voice.lang}).`,
+          : pending.language === 'mr-IN' && this.voiceLanguage(voice) === 'hi'
+            ? `Reading with Hindi voice (${voice.lang}); Marathi pronunciation may differ.`
+            : `Reading with ${voice.name} (${voice.lang}).`,
       );
     };
     utterance.onend = () => {

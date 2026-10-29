@@ -115,8 +115,8 @@ describe('VoiceService', () => {
     api.startListening(vi.fn());
     expect(api.recognitionSupported).toBe(true);
     expect(recognition().lang).toBe('hi-IN');
-    expect(recognition().continuous).toBe(false);
-    expect(recognition().interimResults).toBe(false);
+    expect(recognition().continuous).toBe(true);
+    expect(recognition().interimResults).toBe(true);
     expect(recognition().start).toHaveBeenCalledOnce();
   });
 
@@ -131,12 +131,15 @@ describe('VoiceService', () => {
 
   it('delivers final text once and ignores interim and duplicate results', () => {
     const received = vi.fn();
-    service().startListening(received);
+    const api = service();
+    api.startListening(received);
     recognition().result('नम', false);
     expect(received).not.toHaveBeenCalled();
+    expect(api.interimTranscript()).toBe('नम');
     recognition().result('  नमस्कार मित्रा  ');
     recognition().result('नमस्कार मित्रा');
     expect(received).toHaveBeenCalledExactlyOnceWith('नमस्कार मित्रा');
+    expect(api.interimTranscript()).toBe('');
   });
 
   it('allows the browser final transcript after stopping the microphone', () => {
@@ -177,10 +180,252 @@ describe('VoiceService', () => {
     expect(currentReceived).toHaveBeenCalledWith('new text');
   });
 
+  it('continues after a browser pause and accepts fresh result indexes in the next run', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished);
+    const first = recognition();
+    first.result('पहिले वाक्य');
+    first.onend?.();
+    expect(api.listening()).toBe(true);
+    expect(finished).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    expect(FakeRecognition.instances).toHaveLength(2);
+    expect(recognition().lang).toBe('mr-IN');
+    recognition().result('दुसरे वाक्य');
+    expect(received.mock.calls).toEqual([['पहिले वाक्य'], ['दुसरे वाक्य']]);
+    api.stopListening();
+    recognition().result('दुसरे वाक्य');
+    recognition().onend?.();
+    expect(received).toHaveBeenCalledTimes(2);
+    expect(finished).toHaveBeenCalledOnce();
+    expect(api.listening()).toBe(false);
+  });
+
+  it('delivers stop-time final speech before finishing once and ignores old end events', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished);
+    const active = recognition();
+    const oldEnd = active.onend;
+    api.stopListening();
+    active.result('माझे पूर्ण वाक्य');
+    oldEnd?.();
+    oldEnd?.();
+    vi.advanceTimersByTime(5000);
+    expect(received).toHaveBeenCalledExactlyOnceWith('माझे पूर्ण वाक्य');
+    expect(finished).toHaveBeenCalledOnce();
+    expect(received.mock.invocationCallOrder[0]).toBeLessThan(finished.mock.invocationCallOrder[0]);
+    expect(FakeRecognition.instances).toHaveLength(1);
+  });
+
+  it('does not restore interim words when the final-text callback cancels capture', () => {
+    const api = service();
+    api.startListening(() => api.cancelListening());
+    recognition().onresult?.({
+      resultIndex: 0,
+      results: [
+        { isFinal: true, length: 1, 0: { transcript: 'confirmed' } },
+        { isFinal: false, length: 1, 0: { transcript: 'stale preview' } },
+      ],
+    });
+    expect(api.listening()).toBe(false);
+    expect(api.interimTranscript()).toBe('');
+  });
+
+  it('can stop in the pause between browser runs without reopening the microphone', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished);
+    recognition().result('hello');
+    recognition().onend?.();
+    api.stopListening();
+    expect(finished).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1000);
+    expect(FakeRecognition.instances).toHaveLength(1);
+    expect(api.listening()).toBe(false);
+  });
+
+  it('bounds the final-results wait and never sends an unconfirmed interim transcript', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished);
+    const active = recognition();
+    const lateResult = active.onresult;
+    active.result('unconfirmed words', false);
+    api.stopListening();
+    vi.advanceTimersByTime(1499);
+    expect(finished).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(finished).not.toHaveBeenCalled();
+    expect(active.abort).toHaveBeenCalledOnce();
+    expect(api.interimTranscript()).toBe('');
+    expect(api.error()).toContain('could not confirm the last spoken words');
+    lateResult?.({
+      resultIndex: 0,
+      results: [{ isFinal: true, length: 1, 0: { transcript: 'late words' } }],
+    });
+    expect(received).not.toHaveBeenCalled();
+  });
+
+  it.each(['timeout', 'end'])(
+    'keeps earlier final words for review instead of auto-finishing with an unconfirmed tail on %s',
+    (ending) => {
+      const api = service();
+      const received = vi.fn();
+      const finished = vi.fn();
+      api.startListening(received, finished);
+      recognition().onresult?.({
+        resultIndex: 0,
+        results: [
+          { isFinal: true, length: 1, 0: { transcript: 'confirmed beginning' } },
+          { isFinal: false, length: 1, 0: { transcript: 'unfinished last words' } },
+        ],
+      });
+      api.stopListening();
+      if (ending === 'timeout') vi.advanceTimersByTime(1500);
+      else recognition().onend?.();
+      expect(received).toHaveBeenCalledExactlyOnceWith('confirmed beginning');
+      expect(finished).not.toHaveBeenCalled();
+      expect(api.listening()).toBe(false);
+      expect(api.error()).toContain('confirmed text is kept');
+      expect(api.interimTranscript()).toBe('');
+    },
+  );
+
+  it('can finish on the bounded stop timeout when all received words are confirmed', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished);
+    recognition().result('fully confirmed speech');
+    api.stopListening();
+    vi.advanceTimersByTime(1500);
+    expect(finished).toHaveBeenCalledOnce();
+    expect(api.error()).toBe('');
+    expect(api.listening()).toBe(false);
+  });
+
+  it('finishes normally when the pending tail becomes final before the browser ends', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished);
+    recognition().onresult?.({
+      resultIndex: 0,
+      results: [
+        { isFinal: true, length: 1, 0: { transcript: 'first words' } },
+        { isFinal: false, length: 1, 0: { transcript: 'last words' } },
+      ],
+    });
+    api.stopListening();
+    recognition().onresult?.({
+      resultIndex: 1,
+      results: [
+        { isFinal: true, length: 1, 0: { transcript: 'first words' } },
+        { isFinal: true, length: 1, 0: { transcript: 'last words' } },
+      ],
+    });
+    recognition().onend?.();
+    expect(received.mock.calls).toEqual([['first words'], ['last words']]);
+    expect(finished).toHaveBeenCalledOnce();
+    expect(api.error()).toBe('');
+  });
+
+  it.each(['pause', 'no-speech'])(
+    'does not forget unconfirmed words across a %s restart when later words become final',
+    (ending) => {
+      const api = service();
+      const received = vi.fn();
+      const finished = vi.fn();
+      api.startListening(received, finished);
+      recognition().onresult?.({
+        resultIndex: 0,
+        results: [
+          { isFinal: true, length: 1, 0: { transcript: 'confirmed beginning' } },
+          { isFinal: false, length: 1, 0: { transcript: 'words that were not confirmed' } },
+        ],
+      });
+      if (ending === 'no-speech') recognition().onerror?.({ error: 'no-speech' });
+      recognition().onend?.();
+      expect(api.listening()).toBe(true);
+      vi.advanceTimersByTime(250);
+      recognition().result('later confirmed words');
+      expect(api.interimTranscript()).toBe('');
+      api.stopListening();
+      recognition().onend?.();
+      expect(received.mock.calls).toEqual([['confirmed beginning'], ['later confirmed words']]);
+      expect(finished).not.toHaveBeenCalled();
+      expect(api.error()).toContain('could not confirm the last spoken words');
+      expect(api.listening()).toBe(false);
+    },
+  );
+
+  it('retries benign no-speech endings but stops after three empty runs without auto-finish', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished);
+    for (let index = 0; index < 3; index++) {
+      recognition().onerror?.({ error: 'no-speech' });
+      expect(api.error()).toBe('');
+      recognition().onend?.();
+      vi.advanceTimersByTime(250);
+    }
+    expect(FakeRecognition.instances).toHaveLength(3);
+    expect(api.listening()).toBe(false);
+    expect(api.error()).toContain('No speech was captured');
+    expect(finished).not.toHaveBeenCalled();
+  });
+
+  it('stops a long session at two minutes and keeps confirmed speech for review', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished);
+    recognition().result('a long spoken message');
+    vi.advanceTimersByTime(120000);
+    expect(recognition().stop).toHaveBeenCalledOnce();
+    recognition().onend?.();
+    expect(api.listening()).toBe(false);
+    expect(api.status()).toContain('two-minute');
+    expect(received).toHaveBeenCalledExactlyOnceWith('a long spoken message');
+    expect(finished).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancel', 'language', 'destroy'])(
+    'clears a scheduled browser restart on %s and never calls the finish action',
+    (action) => {
+      const api = service();
+      const finished = vi.fn();
+      api.startListening(vi.fn(), finished);
+      recognition().onend?.();
+      if (action === 'cancel') api.cancelListening();
+      if (action === 'language') api.setLanguage('hi-IN');
+      if (action === 'destroy') TestBed.resetTestingModule();
+      vi.advanceTimersByTime(125000);
+      expect(FakeRecognition.instances).toHaveLength(1);
+      expect(api.listening()).toBe(false);
+      expect(finished).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not run the finish action if permission fails while stop is draining finals', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished);
+    api.stopListening();
+    recognition().onerror?.({ error: 'not-allowed' });
+    vi.advanceTimersByTime(2000);
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.listening()).toBe(false);
+    expect(api.error()).toContain('site settings');
+  });
+
   it.each([
     ['not-allowed', 'site settings'],
     ['audio-capture', 'microphone'],
-    ['no-speech', 'No speech'],
     ['network', 'internet connection'],
     ['language-not-supported', 'another voice language'],
   ])('provides recovery guidance for recognition error %s', (code, expected) => {
@@ -241,13 +486,44 @@ describe('VoiceService', () => {
     expect(api.status()).toContain('en-US');
   });
 
-  it('does not pretend a different language voice can read Marathi', () => {
+  it('uses an available Hindi voice for Marathi with an explicit pronunciation notice', () => {
     voices = [voice('en-US'), voice('hi-IN')];
+    const api = service();
+    api.speak('नमस्कार');
+    expect(spoken().voice?.lang).toBe('hi-IN');
+    expect(spoken().lang).toBe('hi-IN');
+    expect(spoken().text).toBe('नमस्कार');
+    expect(api.voiceAvailability()).toContain('Using Hindi voice');
+    expect(api.voiceAvailability()).toContain('pronunciation may differ');
+    spoken().onstart?.();
+    expect(api.status()).toContain('Hindi voice');
+    expect(api.language()).toBe('mr-IN');
+  });
+
+  it('does not silently substitute English for Marathi when no Indic voice exists', () => {
+    voices = [voice('en-US')];
     const api = service();
     api.speak('नमस्कार');
     expect(synthesizer.speak).not.toHaveBeenCalled();
     expect(api.error()).toContain('No Marathi speech voice');
-    expect(api.speaking()).toBe(false);
+  });
+
+  it('lets the user choose an installed speech voice without changing AI or mic language', () => {
+    const api = service();
+    expect(api.speechVoices()).toContainEqual({ value: 'en-US', label: 'en-US (en-US)' });
+    api.setSpeechVoice('en-US');
+    expect(api.selectedSpeechVoice()).toBe('en-US');
+    expect(api.language()).toBe('mr-IN');
+    expect(api.voiceAvailability()).toContain('Selected speech voice: en-US');
+    api.speak('नमस्कार');
+    expect(spoken().lang).toBe('en-US');
+    expect(spoken().voice?.lang).toBe('en-US');
+    api.setSpeechVoice('unknown');
+    expect(api.selectedSpeechVoice()).toBe('en-US');
+    api.setSpeechVoice('auto');
+    expect(api.selectedSpeechVoice()).toBe('auto');
+    api.speak('नमस्कार');
+    expect(spoken().lang).toBe('mr-IN');
   });
 
   it('waits for delayed browser voices and starts the current explicit read once loaded', () => {

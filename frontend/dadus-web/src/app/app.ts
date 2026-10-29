@@ -6,6 +6,7 @@ import {
   ElementRef,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
   viewChild,
@@ -54,6 +55,7 @@ export class App implements OnInit {
   private catalogVersion = 0;
   private conversationListVersion = 0;
   private healthVersion = 0;
+  private voiceTurnVersion = 0;
   readonly agents = signal<AgentDefinition[]>([COMPANION]);
   readonly selectedAgentId = signal<AgentId>('companion');
   readonly loadingAgents = signal(false);
@@ -79,6 +81,8 @@ export class App implements OnInit {
   readonly historyError = signal('');
   readonly dictationNotice = signal('');
   readonly readingMessageId = signal<string | null>(null);
+  readonly voiceChatActive = signal(false);
+  readonly voiceChatFinishing = signal(false);
   readonly speechActive = computed(() => this.voice.speaking() || this.voice.preparingSpeech());
   readonly replyLanguage = computed<ReplyLanguage>(() => {
     if (this.voice.language() === 'en-IN') return 'en';
@@ -90,7 +94,8 @@ export class App implements OnInit {
       !!this.draft().trim() &&
       this.draft().trim().length <= 4000 &&
       !this.sending() &&
-      !this.loadingHistory(),
+      !this.loadingHistory() &&
+      !this.voiceChatActive(),
   );
   readonly currentTitle = computed(
     () =>
@@ -99,7 +104,11 @@ export class App implements OnInit {
   );
 
   constructor() {
-    this.destroyRef.onDestroy(() => this.voice.stopAll());
+    effect(() => {
+      // Errors and the recording limit can end capture without a Finish action.
+      if (this.voiceChatActive() && !this.voice.listening()) this.clearVoiceTurn();
+    });
+    this.destroyRef.onDestroy(() => this.stopVoice());
   }
 
   ngOnInit(): void {
@@ -330,7 +339,8 @@ export class App implements OnInit {
   onComposerKeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      this.sendMessage();
+      if (this.voiceChatActive()) this.finishVoiceChat();
+      else this.sendMessage();
     }
   }
 
@@ -399,7 +409,7 @@ export class App implements OnInit {
   }
 
   toggleDictation(): void {
-    if (this.sending() || this.loadingHistory()) return;
+    if (this.sending() || this.loadingHistory() || this.voiceChatActive()) return;
     this.dictationNotice.set('');
     if (this.voice.listening()) {
       this.voice.stopListening();
@@ -409,25 +419,83 @@ export class App implements OnInit {
     this.readingMessageId.set(null);
     this.voice.startListening((transcript) => {
       if (version !== this.selectionVersion || this.sending() || this.loadingHistory()) return;
-      const words = transcript.trim();
-      if (!words) return;
-      const current = this.draft();
-      const next = `${current}${current && !/\s$/.test(current) ? ' ' : ''}${words}`;
-      let accepted = next.slice(0, 4000);
-      if (/[\uD800-\uDBFF]$/.test(accepted)) accepted = accepted.slice(0, -1);
-      this.draft.set(accepted);
-      if (next.length > 4000)
-        this.dictationNotice.set(
-          'The 4,000-character limit was reached. Review your draft before sending.',
-        );
-      this.focusComposer();
+      this.appendTranscript(transcript);
     });
   }
 
+  startVoiceChat(): void {
+    if (this.sending() || this.loadingHistory() || this.voiceChatActive()) return;
+    this.stopVoice();
+    this.voice.setReadReplies(true);
+    const version = ++this.voiceTurnVersion;
+    const selection = this.selectionVersion;
+    let heardSpeech = false;
+    let truncated = false;
+    this.voiceChatActive.set(true);
+    this.voice.startListening(
+      (transcript) => {
+        if (
+          version !== this.voiceTurnVersion ||
+          selection !== this.selectionVersion ||
+          this.sending()
+        )
+          return;
+        if (transcript.trim()) heardSpeech = true;
+        if (!this.appendTranscript(transcript)) truncated = true;
+      },
+      () => {
+        if (version !== this.voiceTurnVersion || !this.voiceChatFinishing()) return;
+        this.clearVoiceTurn();
+        if (truncated)
+          this.dictationNotice.set(
+            'The 4,000-character limit was reached. Review the captured draft, then press Send.',
+          );
+        else if (heardSpeech && this.draft().trim()) this.sendMessage();
+        else
+          this.dictationNotice.set(
+            'No speech was captured. Your draft is still here; try Voice chat again.',
+          );
+      },
+    );
+  }
+
+  finishVoiceChat(): void {
+    if (!this.voiceChatActive() || this.voiceChatFinishing()) return;
+    this.voiceChatFinishing.set(true);
+    this.voice.stopListening();
+  }
+
+  cancelVoiceChat(): void {
+    this.stopVoice();
+    this.dictationNotice.set('Voice chat cancelled. Your captured words are still in the draft.');
+  }
+
+  private appendTranscript(transcript: string): boolean {
+    const words = transcript.trim();
+    if (!words) return true;
+    const current = this.draft();
+    const next = `${current}${current && !/\s$/.test(current) ? ' ' : ''}${words}`;
+    let accepted = next.slice(0, 4000);
+    if (/[\uD800-\uDBFF]$/.test(accepted)) accepted = accepted.slice(0, -1);
+    this.draft.set(accepted);
+    if (next.length > 4000)
+      this.dictationNotice.set(
+        'The 4,000-character limit was reached. Review your draft before sending.',
+      );
+    this.focusComposer();
+    return next.length <= 4000;
+  }
+
   changeVoiceLanguage(language: string): void {
+    this.clearVoiceTurn();
     this.dictationNotice.set('');
     this.readingMessageId.set(null);
     this.voice.setLanguage(language);
+  }
+
+  changeSpeechVoice(value: string): void {
+    this.stopVoice();
+    this.voice.setSpeechVoice(value);
   }
 
   setReadReplies(enabled: boolean): void {
@@ -446,6 +514,7 @@ export class App implements OnInit {
   }
 
   testVoice(): void {
+    this.clearVoiceTurn();
     this.readingMessageId.set(null);
     this.voice.testVoice();
   }
@@ -456,9 +525,16 @@ export class App implements OnInit {
   }
 
   private stopVoice(): void {
+    this.clearVoiceTurn();
     this.voice.stopAll();
     this.dictationNotice.set('');
     this.readingMessageId.set(null);
+  }
+
+  private clearVoiceTurn(): void {
+    ++this.voiceTurnVersion;
+    this.voiceChatActive.set(false);
+    this.voiceChatFinishing.set(false);
   }
 
   private healthIssue(failure: HttpErrorResponse): { message: string; code: string } {

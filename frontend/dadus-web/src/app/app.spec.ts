@@ -56,14 +56,19 @@ function createVoiceMock() {
     speaking: signal(false),
     preparingSpeech: signal(false),
     checkingVoice: signal(false),
+    interimTranscript: signal(''),
+    speechVoices: signal([{ value: 'test-hindi', label: 'Available Hindi voice (hi-IN)' }]),
+    selectedSpeechVoice: signal('auto'),
     voiceAvailability: signal('A Marathi browser voice is available for testing.'),
     readReplies: signal(false),
     status: signal(''),
     error: signal(''),
-    startListening: vi.fn<(onFinalTranscript: (text: string) => void) => void>(),
+    startListening:
+      vi.fn<(onFinalTranscript: (text: string) => void, onFinished?: () => void) => void>(),
     stopListening: vi.fn(),
     cancelListening: vi.fn(),
     setLanguage: vi.fn(),
+    setSpeechVoice: vi.fn(),
     setReadReplies: vi.fn(),
     readReply: vi.fn(),
     speak: vi.fn(),
@@ -914,6 +919,139 @@ describe('DADUS chat', () => {
     await submit();
     expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion', 'mr');
     expect(voice.stopAll).toHaveBeenCalled();
+  });
+
+  it('finishes a voice turn before sending all final words and automatically reads the reply', async () => {
+    voice.stopListening.mockImplementation(() => {});
+    (element.querySelector('.start-voice-chat') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(voice.readReplies()).toBe(true);
+    const [transcript, finished] = voice.startListening.mock.calls[0];
+    transcript('आज माझा दिवस');
+    voice.interimTranscript.set('थोडा busy होता');
+    fixture.detectChanges();
+    expect(element.querySelector('#voice-help')?.textContent).toContain('Hearing: थोडा busy होता');
+    expect(app.draft()).toBe('आज माझा दिवस');
+    expect((element.querySelector('.send-button') as HTMLButtonElement).disabled).toBe(true);
+    await submit();
+    expect(api.send).not.toHaveBeenCalled();
+    (element.querySelector('.finish-voice-chat') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(voice.stopListening).toHaveBeenCalledOnce();
+    expect(api.send).not.toHaveBeenCalled();
+    app.finishVoiceChat();
+    expect(voice.stopListening).toHaveBeenCalledOnce();
+    transcript('थोडा busy होता');
+    voice.listening.set(false);
+    finished?.();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(api.send).toHaveBeenCalledExactlyOnceWith(
+      'आज माझा दिवस थोडा busy होता',
+      null,
+      'companion',
+      'mr',
+    );
+    expect(voice.readReply).toHaveBeenCalledWith(answer.message.content);
+    expect(voice.startListening).toHaveBeenCalledOnce();
+    expect(app.voiceChatActive()).toBe(false);
+    finished?.();
+    expect(api.send).toHaveBeenCalledOnce();
+  });
+
+  it('does not send an earlier typed draft when a voice turn captures no speech', async () => {
+    await compose('Keep this typed thought');
+    voice.stopListening.mockImplementation(() => {});
+    app.startVoiceChat();
+    app.finishVoiceChat();
+    voice.listening.set(false);
+    voice.startListening.mock.calls[0][1]?.();
+    fixture.detectChanges();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(app.draft()).toBe('Keep this typed thought');
+    expect(app.dictationNotice()).toContain('No speech was captured');
+  });
+
+  it('cancels a voice turn while retaining the draft and ignores its late completion', () => {
+    app.startVoiceChat();
+    const [transcript, finished] = voice.startListening.mock.calls[0];
+    transcript('हे शब्द ठेव');
+    app.cancelVoiceChat();
+    transcript('stale words');
+    finished?.();
+    expect(app.draft()).toBe('हे शब्द ठेव');
+    expect(api.send).not.toHaveBeenCalled();
+    expect(app.voiceChatActive()).toBe(false);
+  });
+
+  it('invalidates a pending voice send when language or conversation changes', () => {
+    voice.stopListening.mockImplementation(() => {});
+    app.startVoiceChat();
+    const [transcript, finished] = voice.startListening.mock.calls[0];
+    transcript('Unsent words');
+    app.finishVoiceChat();
+    app.changeVoiceLanguage('hi-IN');
+    finished?.();
+    app.startVoiceChat();
+    const nextFinished = voice.startListening.mock.calls[1][1];
+    app.finishVoiceChat();
+    app.newConversation();
+    nextFinished?.();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(app.draft()).toBe('Unsent words');
+  });
+
+  it('recovers from recognition failure without leaving voice chat stuck or sending a draft', async () => {
+    app.startVoiceChat();
+    voice.startListening.mock.calls[0][0]('Captured before the error');
+    voice.error.set('Microphone disconnected.');
+    voice.listening.set(false);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.voiceChatActive()).toBe(false);
+    expect(app.voiceChatFinishing()).toBe(false);
+    expect(app.draft()).toBe('Captured before the error');
+    expect(api.send).not.toHaveBeenCalled();
+    expect(element.querySelector('.start-voice-chat')).not.toBeNull();
+  });
+
+  it('keeps an oversized voice draft for review instead of sending truncated speech', () => {
+    voice.stopListening.mockImplementation(() => {});
+    app.startVoiceChat();
+    voice.startListening.mock.calls[0][0]('x'.repeat(4001));
+    app.finishVoiceChat();
+    voice.listening.set(false);
+    voice.startListening.mock.calls[0][1]?.();
+    expect(api.send).not.toHaveBeenCalled();
+    expect(app.draft()).toHaveLength(4000);
+    expect(app.dictationNotice()).toContain('Review the captured draft');
+  });
+
+  it('keeps the voice draft after a failed AI request and permits reading opt-out while waiting', async () => {
+    const result = new Subject<ChatResult>();
+    api.send.mockReturnValue(result);
+    voice.stopListening.mockImplementation(() => {});
+    app.startVoiceChat();
+    voice.startListening.mock.calls[0][0]('Reply to my spoken question');
+    app.finishVoiceChat();
+    voice.listening.set(false);
+    voice.startListening.mock.calls[0][1]?.();
+    app.setReadReplies(false);
+    result.error(new HttpErrorResponse({ status: 0 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(app.draft()).toBe('Reply to my spoken question');
+    expect(voice.readReply).not.toHaveBeenCalled();
+    expect(voice.startListening).toHaveBeenCalledOnce();
+  });
+
+  it('selects an installed speech voice independently of the AI and microphone language', () => {
+    const select = element.querySelector('#speech-voice') as HTMLSelectElement;
+    select.value = 'test-hindi';
+    select.dispatchEvent(new Event('change'));
+    expect(voice.setSpeechVoice).toHaveBeenCalledWith('test-hindi');
+    expect(app.replyLanguage()).toBe('mr');
+    expect(voice.setLanguage).not.toHaveBeenCalled();
   });
 
   it('tests browser speech explicitly without an AI request, microphone access, or changing the chat', async () => {
