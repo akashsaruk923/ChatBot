@@ -99,6 +99,7 @@ export class App implements OnInit {
   );
 
   constructor() {
+    this.voice.configureOnlineSpeech((text, language) => this.api.synthesize(text, language));
     this.destroyRef.onDestroy(() => this.voice.stopAll());
   }
 
@@ -119,6 +120,7 @@ export class App implements OnInit {
           this.connectionCode.set('');
           this.connected.set(true);
           this.mode.set(health.mode);
+          this.voice.configureSpeech(health.speech);
           this.checkingConnection.set(false);
         },
         error: (failure: HttpErrorResponse) => {
@@ -208,6 +210,13 @@ export class App implements OnInit {
   }
 
   languageHelp(): string {
+    if (this.voice.onlineSpeech()) {
+      if (this.replyLanguage() === 'en')
+        return 'Language sets AI replies, microphone and the online voice.';
+      if (this.replyLanguage() === 'hi')
+        return 'यह भाषा AI के जवाब, माइक और online आवाज़ के लिए है।';
+      return 'ही भाषा AIची उत्तरं, माइक आणि online आवाजासाठी आहे.';
+    }
     if (this.replyLanguage() === 'en')
       return 'Language sets AI replies, microphone and speech. Spoken voices depend on your browser.';
     if (this.replyLanguage() === 'hi')

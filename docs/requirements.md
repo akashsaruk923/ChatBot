@@ -12,6 +12,7 @@ This repository starts the web MVP described in the supplied DADUS AI handoff. T
 - An explicit SQLite Development-only fallback so the local demo can run if the SQL Server image is unavailable; SQL Server remains the default and must be validated separately.
 - C# Companion, Planner and Coding agents selected from the Angular UI, with a bounded live tool-calling loop and local calculator/time tools. Demo commands are visibly distinguished from live model-selected tool use.
 - Browser microphone dictation into a reviewed draft, selectable Marathi/Hindi/English language, and optional spoken replies using available browser/system voices. Unsupported browsers and missing voices show recovery guidance; voice recognition never sends automatically.
+- Optional Azure neural speech for Marathi/Hindi/English when native voices are missing. It uses a separate backend-only Speech resource key/region, bounded text/audio requests and cancellable playback. Azure Free (F0) availability and remaining quota require account-specific verification; the application never upgrades tiers or adds paid fallback.
 - Safe provider error codes that distinguish rejected credentials, project access, API quota, rate limits and unavailable models without exposing provider response bodies.
 - A single Language control that requests English, Hindi or Marathi model replies and selects matching microphone/speech language. API callers can use Auto for Roman-script or mixed-language input. Language changes retain the current conversation.
 - A familiar dark chat interface with sidebar history, a compact header, a centered feed and a bottom composer. DADUS branding, voice permissions and visible provider/demo status remain clear.
@@ -27,6 +28,7 @@ This repository starts the web MVP described in the supplied DADUS AI handoff. T
 7. Agent selection reaches the backend, unsupported agents are rejected, real local tool results are shown as escaped text, and a mocked live model can call a tool and consume its result before answering.
 8. Browser API mocks verify dictation, cancellation, explicit send, reading opt-in and unsupported/error paths. Real microphone and speech output are device-dependent and need manual validation.
 9. Selected language reaches the real serialized provider system prompt; switching languages preserves earlier turns. Invalid language input fails before a provider request or persisted exchange. These checks use mocked provider responses and do not establish live answer quality.
+10. Mocked speech transports verify language selection, escaped SSML, independent credentials, bounded audio, safe failures and cancellation without saving audio or breaking chat when optional speech is unconfigured. Live Azure access, free quota and audio quality require manual validation.
 
 ## Later milestones
 

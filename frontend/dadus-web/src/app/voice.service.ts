@@ -1,4 +1,5 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
+import { OnlineSpeechPlayer, SpeechConfiguration, SpeechTransport } from './online-speech';
 
 export type VoiceLanguage = 'mr-IN' | 'hi-IN' | 'en-IN';
 
@@ -56,6 +57,14 @@ export class VoiceService {
   private voiceLoadTimer: ReturnType<typeof setTimeout> | null = null;
   private speechStartTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSpeech: SpeechRequest | null = null;
+  private readonly speechConfiguration = signal<SpeechConfiguration | null>(null);
+  private onlineTransport: SpeechTransport | null = null;
+  private readonly onlinePlayer = new OnlineSpeechPlayer((state) => {
+    this.preparingSpeech.set(state.preparing);
+    this.speaking.set(state.speaking);
+    this.status.set(state.status);
+    if (state.error) this.error.set(state.error);
+  });
   private readonly voicesChanged = () => {
     if (this.destroyed) return;
     if (this.refreshVoices().length) {
@@ -80,7 +89,18 @@ export class VoiceService {
   readonly readReplies = signal(false);
   readonly status = signal('');
   readonly error = signal('');
+  readonly onlineSpeech = computed(() => this.speechConfiguration()?.provider === 'azure');
+  readonly playbackSupported = computed(() =>
+    this.onlineSpeech() ? OnlineSpeechPlayer.supported : this.synthesisSupported,
+  );
   readonly voiceAvailability = computed(() => {
+    if (this.onlineSpeech()) {
+      if (!this.playbackSupported())
+        return 'Online audio playback is not supported in this browser.';
+      if (!this.speechConfiguration()?.configured)
+        return 'Online voice needs an Azure Speech key and region in the backend. Complete speech setup, restart the API, then reconnect.';
+      return `${this.languageLabel(this.language())} Azure online voice is configured. Use Test voice to try playback. Azure resource quotas apply.`;
+    }
     if (!this.synthesisSupported) return 'Speech playback is not supported in this browser.';
     const voice = this.findVoice(this.language());
     const label = this.languageLabel(this.language());
@@ -103,6 +123,28 @@ export class VoiceService {
     });
   }
 
+  configureOnlineSpeech(transport: SpeechTransport): void {
+    this.onlineTransport = transport;
+  }
+
+  configureSpeech(configuration?: SpeechConfiguration): void {
+    const next: SpeechConfiguration | null =
+      configuration?.provider === 'azure'
+        ? {
+            provider: 'azure',
+            configured: configuration.configured === true,
+            languages: ['mr-IN', 'hi-IN', 'en-IN'],
+            maxTextLength: Number.isInteger(configuration.maxTextLength)
+              ? Math.min(1000, Math.max(1, configuration.maxTextLength))
+              : 1000,
+          }
+        : null;
+    if (JSON.stringify(next) === JSON.stringify(this.speechConfiguration())) return;
+    this.stopAll();
+    this.speechConfiguration.set(next);
+    this.error.set('');
+  }
+
   setLanguage(value: string): void {
     if (!this.languages.some((language) => language.value === value)) return;
     this.stopAll();
@@ -112,7 +154,7 @@ export class VoiceService {
   }
 
   setReadReplies(enabled: boolean): void {
-    this.readReplies.set(enabled && this.synthesisSupported);
+    this.readReplies.set(enabled && this.playbackSupported());
     if (!enabled) this.stopSpeaking();
   }
 
@@ -236,6 +278,33 @@ export class VoiceService {
     if (this.destroyed || !text.trim()) return;
     this.error.set('');
     this.stopSpeaking();
+    if (this.onlineSpeech()) {
+      if (!this.playbackSupported()) {
+        this.error.set(
+          'Online audio playback is not available in this browser. You can still read the text.',
+        );
+        return;
+      }
+      const configuration = this.speechConfiguration();
+      if (!configuration?.configured || !this.onlineTransport) {
+        this.error.set(
+          'Online voice needs an Azure Speech key and region in the backend. Complete speech setup, restart the API, then reconnect.',
+        );
+        return;
+      }
+      if (text.trim().length > 12000) {
+        this.error.set('This reply is too long for online speech. Try a shorter reply.');
+        return;
+      }
+      this.cancelListening();
+      this.onlinePlayer.play(
+        text.trim(),
+        this.language(),
+        this.onlineTransport,
+        configuration.maxTextLength,
+      );
+      return;
+    }
     if (!this.synthesisSupported) {
       this.error.set(
         'Reading replies aloud is not available in this browser. You can still read the text.',
@@ -262,6 +331,7 @@ export class VoiceService {
 
   stopSpeaking(): void {
     ++this.speechVersion;
+    this.onlinePlayer.cancel();
     this.pendingSpeech = null;
     this.clearSpeechStartTimer();
     this.finishVoiceDiscovery();

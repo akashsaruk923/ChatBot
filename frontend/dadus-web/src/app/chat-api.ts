@@ -1,6 +1,8 @@
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
+import type { SpeechConfiguration } from './online-speech';
+import type { VoiceLanguage } from './voice.service';
 
 export type ChatMode = 'demo' | 'openai' | 'gemini';
 export type AgentId = 'companion' | 'planner' | 'coding';
@@ -35,6 +37,7 @@ export interface Health {
   status: string;
   mode: ChatMode;
   database: string;
+  speech?: SpeechConfiguration;
 }
 
 export interface ChatResult {
@@ -94,6 +97,17 @@ export class ChatApi {
 
   health(): Observable<Health> {
     return this.http.get<Health>('/api/health', { headers: this.headers });
+  }
+
+  synthesize(text: string, language: VoiceLanguage): Observable<Blob> {
+    return this.http.post(
+      '/api/speech/synthesize',
+      { text, language },
+      {
+        headers: this.headers,
+        responseType: 'blob',
+      },
+    );
   }
 
   agents(): Observable<{ agents: AgentDefinition[] }> {
