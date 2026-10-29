@@ -137,49 +137,11 @@ After pulling this update, **rebuild and restart the backend** before testing th
 
 Choose Marathi, Hindi or English with **Language** beside the composer, then use **Mic** and allow microphone access in the browser. Use **Stop dictation**, review the recognized text in the draft, and press **Send** yourself. Dictation never sends a message automatically. A recent Chrome or Edge on localhost is a useful starting point; recognition support, permissions and language availability depend on the browser and may require an internet connection. A recognition failure leaves manual text input available.
 
-Use **Test voice** first to hear a short fixed greeting in the selected language. It leaves your draft and conversation alone and does not enable automatic reading or open the microphone. The default **Browser** speech provider uses voices exposed by the browser and needs no backend speech key. Its voice availability line names the matching voice or explains which language is unavailable. Installing a Windows Marathi display language does not guarantee a Marathi speech voice in Chrome.
+Use **Test voice** first to hear a short fixed greeting in the selected language. It works independently of the API, database and AI key, leaves your draft and conversation alone, and does not enable automatic reading or open the microphone. The voice availability line names the matching voice or explains which language is unavailable. If Marathi is unavailable, try an available Hindi or English voice; installing Marathi speech is not supported by every Windows/browser combination.
 
 Enable **Read replies aloud** to read new replies automatically, or use an existing assistant message's **Read aloud** control. Chrome can load voices after the page starts: the app waits briefly for them, offers Stop while preparing audio, and reports an error if playback never starts. Long replies are read in short Unicode-safe chunks. Blocked playback, missing voices and audio-device failures show a visible message above the composer. Use the button directly and check Chrome site sound permission, tab mute and Windows output volume when prompted. Marathi speech output is not guaranteed on every PC.
 
-The application does not record or store audio. Browser speech recognition or synthesis may use the browser vendor's online speech services. With optional Azure speech, the text you choose to read is sent through the .NET API to Azure, and generated audio is returned without being saved by this application. The microphone is activated only by its button, and automatic reading starts off. This is turn-by-turn dictation and reading, without wake words, background listening or real-time audio streaming. Tests use mocked browser/provider APIs; actual microphone, voice quality and live service access need manual validation.
-
-### Natural Marathi, Hindi and English speech with Azure
-
-Choose this option when Chrome has no Marathi voice. Azure speech generates audio on the server and does not depend on installed Windows speech voices. Chat can continue using Gemini; Azure Speech needs its own resource key and region.
-
-1. Sign in to the [Azure portal](https://portal.azure.com/) and create a **Speech** resource. Select **Free (F0)** if it is offered for your subscription and region. Check the current free allowance in the portal and [Speech pricing](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/). If F0 is unavailable, stop here rather than selecting paid **S0**. Azure account creation may require subscription/payment verification; this application does not create resources or change billing tiers.
-2. Open the resource's **Keys and Endpoint** page. Copy one key and its **Location/Region**, such as `centralindia`. Use the region identifier, not an endpoint URL. Keep the key on your PC; do not send it in chat or put it in Angular/Git.
-3. In Visual Studio, right-click **Dadus.Api → Manage User Secrets**. Add these settings to the existing JSON, preserving your Gemini/OpenAI and database settings. Replace the example key locally and use the resource's actual region:
-
-   ```json
-   {
-     "Speech:Provider": "Azure",
-     "DadusAzureSpeech:ApiKey": "YOUR_AZURE_SPEECH_KEY",
-     "DadusAzureSpeech:Region": "centralindia"
-   }
-   ```
-
-4. Stop the old backend with **Ctrl+C**, or **Shift+F5** in Visual Studio. Rebuild in the **same CMD window** that already has your working SQL connection and Gemini model settings:
-
-   ```bat
-   cd /d C:\Users\akash\source\repos\ChatBot
-   set "ASPNETCORE_ENVIRONMENT=Development"
-   dotnet run --project backend\Dadus.Api --no-launch-profile -- --urls http://127.0.0.1:5088 --Chat:Mode=Gemini
-   ```
-
-   Use a normal build after pulling source changes or initializing User Secrets. If an orphaned process locks `Dadus.Api.exe`, run this from the repository root before rebuilding; it stops only this project's Debug apphost:
-
-   ```bat
-   powershell -NoProfile -Command "$dadusExe = Join-Path (Get-Location) 'backend\Dadus.Api\bin\Debug\net8.0\Dadus.Api.exe'; Get-Process Dadus.Api -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dadusExe } | Stop-Process"
-   ```
-
-5. Refresh the Angular page, select **मराठी**, and click **Test voice**. After that succeeds, enable **Read replies aloud** if wanted. Test voice sends only a fixed greeting to the speech service and never calls the chat model. The application uses `mr-IN-AarohiNeural`, `hi-IN-SwaraNeural` and `en-IN-NeerjaNeural` for the three languages.
-
-`GET /api/speech/config` and `health.speech` report the selected provider and whether its local configuration is complete. **Configured does not verify live access, resource tier, remaining free allowance or billing.** Azure quota/rate-limit failures remain visible; the application does not upgrade a resource, switch to a paid provider or fall back to a different voice. Requests are limited to 1,000 characters each, and longer replies are played in sequential chunks. Stop cancels pending playback and requests; audio is not cached or added to chat history.
-
-Set `Speech:Provider` back to `Browser` and restart to use browser voices again. Environment-variable equivalents are `Speech__Provider`, `DadusAzureSpeech__ApiKey` and `DadusAzureSpeech__Region`; `.env.example` is documentation and is not loaded automatically.
-
-Microsoft references: [supported voices](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts), [text-to-speech REST API](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech) and [quotas and limits](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits). Account-specific free allowance and live audio were not verified in cloud tests.
+The application does not record or store audio. Browser speech recognition or synthesis may use the browser vendor's online speech services; only reviewed text that you explicitly send follows the normal chat/storage flow. The microphone is activated only by its button, and automatic reading starts off. This is turn-by-turn dictation and reading, without wake words, background listening or real-time audio streaming. Voice tests use browser API mocks; actual microphone and voice availability must be checked on the user's device.
 
 ## AI agents in .NET
 
@@ -260,13 +222,11 @@ When using `--no-launch-profile`, explicitly supply `--urls http://127.0.0.1:508
 
 ## API and design
 
-`GET /api/health` verifies the storage schema, reports `demo`, `gemini` or `openai`, and includes local speech configuration metadata. Chat and speech synthesis endpoints require an anonymous GUID in `X-Dadus-Session`:
+`GET /api/health` verifies the storage schema and reports `demo` or `openai`. Chat endpoints require an anonymous GUID in `X-Dadus-Session`:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/agents` | List supported C# agents and tools. |
-| GET | `/api/speech/config` | Report speech provider, local configuration readiness, supported languages and per-request text limit; makes no live provider request. |
-| POST | `/api/speech/synthesize` | Synthesize `{text, language}` as uncached WAV audio using configured Azure Speech. Language accepts `mr-IN`, `hi-IN`, `en-IN`; text is capped at 1,000 characters. |
 | POST | `/api/chat/message` | Send `{conversationId?, message, agentId?, language?}` and save a completed exchange. The default agent is `companion`; `language` accepts `auto` (default), `en`, `hi`, `mr`. The response includes the normalized language, `agentId` and tool summaries. |
 | GET | `/api/chat/conversations` | List the current anonymous session's conversations. |
 | GET | `/api/chat/history` | Read a bounded page using `conversationId`, optional `before`, and `limit`. |

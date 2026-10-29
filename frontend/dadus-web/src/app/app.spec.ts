@@ -1,10 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Observable, of, Subject, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { App } from './app';
 import { AgentDefinition, ChatApi, ChatResult, HistoryResult } from './chat-api';
-import { VoiceLanguage, VoiceService } from './voice.service';
+import { VoiceService } from './voice.service';
 
 const CONVERSATION = {
   id: '9b2ef616-5a80-4cc2-9f32-c94544427048',
@@ -46,11 +46,6 @@ function createVoiceMock() {
   const voice = {
     recognitionSupported: true,
     synthesisSupported: true,
-    playbackSupported: vi.fn<() => boolean>(),
-    onlineSpeech: signal(false),
-    configureOnlineSpeech:
-      vi.fn<(transport: (text: string, language: VoiceLanguage) => Observable<Blob>) => void>(),
-    configureSpeech: vi.fn(),
     languages: [
       { value: 'mr-IN', label: 'Marathi' },
       { value: 'hi-IN', label: 'Hindi' },
@@ -76,7 +71,6 @@ function createVoiceMock() {
     stopSpeaking: vi.fn(),
     stopAll: vi.fn(),
   };
-  voice.playbackSupported.mockImplementation(() => voice.synthesisSupported);
   voice.startListening.mockImplementation(() => voice.listening.set(true));
   voice.stopListening.mockImplementation(() => voice.listening.set(false));
   voice.cancelListening.mockImplementation(() => voice.listening.set(false));
@@ -119,7 +113,6 @@ describe('DADUS chat', () => {
     conversations: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     history: ReturnType<typeof vi.fn>;
-    synthesize: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -130,7 +123,6 @@ describe('DADUS chat', () => {
       conversations: vi.fn(() => of({ conversations: [] })),
       send: vi.fn(() => of(answer)),
       history: vi.fn(() => of({ conversationId: CONVERSATION.id, messages: [], hasMore: false })),
-      synthesize: vi.fn(() => of(new Blob(['audio'], { type: 'audio/wav' }))),
     };
     await TestBed.configureTestingModule({
       imports: [App],
@@ -1116,45 +1108,6 @@ describe('DADUS chat', () => {
     await submit();
     expect(api.send).toHaveBeenCalledWith('I can still type', null, 'companion', 'mr');
     expect(element.querySelector('.message-feed')?.textContent).toContain(answer.message.content);
-  });
-
-  it('configures online speech from readiness and keeps it opt-in without native browser voices', () => {
-    const speech = {
-      provider: 'azure',
-      configured: true,
-      languages: ['mr-IN', 'hi-IN', 'en-IN'],
-      maxTextLength: 1000,
-    };
-    api.health.mockReturnValue(of({ status: 'ok', database: 'ready', mode: 'gemini', speech }));
-    voice.onlineSpeech.set(true);
-    voice.synthesisSupported = false;
-    voice.playbackSupported.mockReturnValue(true);
-    voice.voiceAvailability.set('Marathi online voice is configured.');
-    app.checkConnection();
-    fixture.detectChanges();
-
-    expect(voice.configureSpeech).toHaveBeenLastCalledWith(speech);
-    expect((element.querySelector('.test-voice') as HTMLButtonElement).disabled).toBe(false);
-    expect((element.querySelector('.read-replies-toggle input') as HTMLInputElement).disabled).toBe(
-      false,
-    );
-    expect(voice.readReplies()).toBe(false);
-    expect(voice.testVoice).not.toHaveBeenCalled();
-    expect(voice.speak).not.toHaveBeenCalled();
-    expect(element.querySelector('.online-speech-notice')?.textContent).toContain('Azure Speech');
-    expect(element.querySelector('#language-help')?.textContent).not.toContain('browserवर');
-    expect(element.querySelector('#voice-help')?.textContent).not.toContain(
-      'Reading aloud is unavailable',
-    );
-  });
-
-  it('registers the shared speech transport and accepts older readiness without speech metadata', () => {
-    const transport = voice.configureOnlineSpeech.mock.calls[0][0];
-    transport('नमस्कार', 'mr-IN').subscribe();
-    expect(api.synthesize).toHaveBeenCalledWith('नमस्कार', 'mr-IN');
-    expect(voice.configureSpeech).toHaveBeenLastCalledWith(undefined);
-    expect(voice.startListening).not.toHaveBeenCalled();
-    expect(voice.readReply).not.toHaveBeenCalled();
   });
 
   it('lets the user opt out of reading while waiting for an AI reply', async () => {

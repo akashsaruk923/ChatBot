@@ -38,8 +38,6 @@ builder.Services.AddDbContext<DadusDbContext>(options =>
 builder.Services.AddSingleton<ConversationLocks>();
 builder.Services.AddHttpClient<OpenAiChatResponder>(client => client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddHttpClient<GeminiChatResponder>(client => client.Timeout = TimeSpan.FromSeconds(45));
-builder.Services.AddHttpClient<AzureSpeechService>(client => client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 builder.Services.AddScoped<IChatResponder>(services =>
 {
     var mode = builder.Configuration["Chat:Mode"] ?? "OpenAI";
@@ -66,22 +64,11 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0,
             AutoReplenishment = true
         }));
-    options.AddPolicy("speech", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "local",
-        _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 12,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0,
-            AutoReplenishment = true
-        }));
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.Headers.RetryAfter = "60";
-        var speechRequest = context.HttpContext.Request.Path.StartsWithSegments("/api/speech");
-        await Results.Problem(statusCode: 429, title: "Too many requests",
-            detail: speechRequest ? "Please wait a minute before requesting more speech audio." : "Please wait a minute before sending another message.",
-            extensions: new Dictionary<string, object?> { ["code"] = speechRequest ? "speech_rate_limited" : "rate_limit_exceeded" }).ExecuteAsync(context.HttpContext);
+        await Results.Problem(statusCode: 429, title: "Too many requests", detail: "Please wait a minute before sending another message.",
+            extensions: new Dictionary<string, object?> { ["code"] = "rate_limit_exceeded" }).ExecuteAsync(context.HttpContext);
     };
 });
 
@@ -118,7 +105,7 @@ app.UseExceptionHandler(exceptionApp => exceptionApp.Run(async context =>
 }));
 app.UseRateLimiter();
 
-app.MapGet("/api/health", async (DadusDbContext db, IChatResponder responder, AzureSpeechService speech, CancellationToken cancellationToken) =>
+app.MapGet("/api/health", async (DadusDbContext db, IChatResponder responder, CancellationToken cancellationToken) =>
 {
     if (!await db.Database.CanConnectAsync(cancellationToken))
         return Results.Problem(statusCode: 503, title: "Storage unavailable", detail: "The database is not ready.",
@@ -134,22 +121,8 @@ app.MapGet("/api/health", async (DadusDbContext db, IChatResponder responder, Az
     };
     if (keySetting is not null)
         _ = ProviderKeyConfiguration.Require(builder.Configuration[keySetting], responder.Mode == "gemini" ? "Gemini" : "OpenAI");
-    return Results.Ok(new { status = "ok", mode = responder.Mode, database = "ready", speech = speech.GetConfiguration() });
+    return Results.Ok(new { status = "ok", mode = responder.Mode, database = "ready" });
 });
-
-app.MapGet("/api/speech/config", (AzureSpeechService speech, HttpContext httpContext) =>
-{
-    httpContext.Response.Headers.CacheControl = "no-store";
-    return Results.Ok(speech.GetConfiguration());
-});
-app.MapPost("/api/speech/synthesize", async (SpeechRequest request, HttpContext httpContext,
-    AzureSpeechService speech, CancellationToken cancellationToken) =>
-{
-    httpContext.Response.Headers.CacheControl = "no-store";
-    _ = Session(httpContext);
-    var audio = await speech.SynthesizeAsync(request.Text, request.Language, cancellationToken);
-    return Results.File(audio, "audio/wav");
-}).RequireRateLimiting("speech");
 
 var chat = app.MapGroup("/api/chat");
 
@@ -273,5 +246,4 @@ static string ConversationTitle(string text)
 }
 
 public sealed record ChatRequest(Guid? ConversationId, string? Message, string? AgentId = null, string? Language = null);
-public sealed record SpeechRequest(string? Text, string? Language);
 public partial class Program;

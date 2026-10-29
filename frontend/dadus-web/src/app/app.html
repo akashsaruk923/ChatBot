@@ -181,7 +181,7 @@
                 <button
                   class="read-reply"
                   type="button"
-                  [disabled]="!voice.playbackSupported() || sending() || loadingHistory()"
+                  [disabled]="!voice.synthesisSupported || sending() || loadingHistory()"
                   [attr.aria-pressed]="speechActive() && readingMessageId() === message.id"
                   (click)="readMessage(message)"
                 >
@@ -329,14 +329,14 @@
           ><input
             type="checkbox"
             [checked]="voice.readReplies()"
-            [disabled]="!voice.playbackSupported()"
+            [disabled]="!voice.synthesisSupported"
             (change)="setReadReplies($any($event.target).checked)"
           />Read replies aloud</label
         >
         <button
           class="read-reply test-voice"
           type="button"
-          [disabled]="!voice.playbackSupported()"
+          [disabled]="!voice.synthesisSupported"
           aria-describedby="voice-availability"
           (click)="testVoice()"
         >
@@ -360,14 +360,7 @@
             then press Send.
           </p>
         }
-        @if (voice.onlineSpeech()) {
-          <p class="online-speech-notice">
-            Online voice sends the text being read through this API to Azure Speech. Test voice also
-            uses that service. Audio is not saved in your conversation. Your Azure resource's quota
-            and pricing apply.
-          </p>
-        }
-        @if (!voice.playbackSupported()) {
+        @if (!voice.synthesisSupported) {
           <p>Reading aloud is unavailable in this browser. Text replies still work.</p>
         }
         @if (voice.status()) {

@@ -131,24 +131,6 @@ describe('ChatApi', () => {
     request.flush({ conversationId: CONVERSATION, message: {}, mode: 'demo' });
   });
 
-  it('requests speech audio with the chat session and no provider credentials', () => {
-    localStorage.setItem('dadus-session', SESSION);
-    let received: Blob | undefined;
-    const audio = new Blob(['RIFF audio fixture'], { type: 'audio/wav' });
-    TestBed.inject(ChatApi)
-      .synthesize('नमस्कार!', 'mr-IN')
-      .subscribe((result) => (received = result));
-    const request = http.expectOne('/api/speech/synthesize');
-    expect(request.request.method).toBe('POST');
-    expect(request.request.body).toEqual({ text: 'नमस्कार!', language: 'mr-IN' });
-    expect(request.request.responseType).toBe('blob');
-    expect(request.request.headers.get('X-Dadus-Session')).toBe(SESSION);
-    expect(request.request.headers.has('Authorization')).toBe(false);
-    expect(request.request.headers.has('Ocp-Apim-Subscription-Key')).toBe(false);
-    request.flush(audio);
-    expect(received).toBe(audio);
-  });
-
   it('loads the agent catalog using the current browser session', () => {
     localStorage.setItem('dadus-session', SESSION);
     const agents: AgentDefinition[] = [
