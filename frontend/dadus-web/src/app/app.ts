@@ -426,6 +426,19 @@ export class App implements OnInit {
     });
   }
 
+  toggleVoiceChat(): void {
+    if (this.sending() || this.loadingHistory()) return;
+    if (this.voiceChatActive()) {
+      this.finishVoiceChat();
+      return;
+    }
+    if (this.voice.listening()) {
+      this.voice.stopListening();
+      return;
+    }
+    this.startVoiceChat();
+  }
+
   startVoiceChat(): void {
     if (this.sending() || this.loadingHistory() || this.voiceChatActive()) return;
     this.stopVoice();
@@ -447,7 +460,7 @@ export class App implements OnInit {
         if (!this.appendTranscript(transcript)) truncated = true;
       },
       () => {
-        if (version !== this.voiceTurnVersion || !this.voiceChatFinishing()) return;
+        if (version !== this.voiceTurnVersion || !this.voiceChatActive()) return;
         this.clearVoiceTurn();
         if (truncated)
           this.dictationNotice.set(
@@ -456,9 +469,10 @@ export class App implements OnInit {
         else if (heardSpeech && this.draft().trim()) this.sendMessage();
         else
           this.dictationNotice.set(
-            'No speech was captured. Your draft is still here; try Voice chat again.',
+            'No speech was captured. Your draft is still here; click Mic to try again.',
           );
       },
+      { autoFinishAfterSilenceMs: 1800 },
     );
   }
 

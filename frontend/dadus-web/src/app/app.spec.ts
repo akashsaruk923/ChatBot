@@ -64,7 +64,13 @@ function createVoiceMock() {
     status: signal(''),
     error: signal(''),
     startListening:
-      vi.fn<(onFinalTranscript: (text: string) => void, onFinished?: () => void) => void>(),
+      vi.fn<
+        (
+          onFinalTranscript: (text: string) => void,
+          onFinished?: () => void,
+          options?: { autoFinishAfterSilenceMs?: number },
+        ) => void
+      >(),
     stopListening: vi.fn(),
     cancelListening: vi.fn(),
     setLanguage: vi.fn(),
@@ -905,23 +911,25 @@ describe('DADUS chat', () => {
 
   it('appends dictated text to a typed draft for review without automatically sending', async () => {
     await compose('आज आपण');
-    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    (element.querySelector('.dictate-only') as HTMLButtonElement).click();
     fixture.detectChanges();
-    expect(element.querySelector('.mic-button')?.textContent).toContain('Stop dictation');
+    expect(element.querySelector('.dictate-only')?.textContent).toContain('Stop dictation');
     const transcript = voice.startListening.mock.calls[0][0];
     transcript('मराठीत गप्पा मारूया');
     fixture.detectChanges();
     await fixture.whenStable();
     expect(element.querySelector('textarea')?.value).toBe('आज आपण मराठीत गप्पा मारूया');
     expect(api.send).not.toHaveBeenCalled();
-    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    expect(voice.startListening.mock.calls[0][1]).toBeUndefined();
+    expect(voice.startListening.mock.calls[0][2]).toBeUndefined();
+    (element.querySelector('.dictate-only') as HTMLButtonElement).click();
     expect(voice.stopListening).toHaveBeenCalledOnce();
     await submit();
     expect(api.send).toHaveBeenCalledWith('आज आपण मराठीत गप्पा मारूया', null, 'companion', 'mr');
     expect(voice.stopAll).toHaveBeenCalled();
   });
 
-  it('enables spoken replies from the ordinary Mic and reads only the completed AI answer', async () => {
+  it('automatically sends the primary Mic question after a pause and reads only the completed reply', async () => {
     const response = new Subject<ChatResult>();
     api.send.mockReturnValue(response);
     (element.querySelector('.mic-button') as HTMLButtonElement).click();
@@ -929,14 +937,26 @@ describe('DADUS chat', () => {
     expect((element.querySelector('.read-replies-toggle input') as HTMLInputElement).checked).toBe(
       true,
     );
-    voice.startListening.mock.calls[0][0]('माझ्याशी बोल');
+    const [transcript, completed, options] = voice.startListening.mock.calls[0];
+    expect(options).toEqual({ autoFinishAfterSilenceMs: 1800 });
+    transcript('माझ्याशी बोल');
     expect(api.send).not.toHaveBeenCalled();
     expect(voice.readReply).not.toHaveBeenCalled();
     expect(voice.speak).not.toHaveBeenCalled();
-    (element.querySelector('.mic-button') as HTMLButtonElement).click();
-    await submit();
+    expect(app.voiceChatFinishing()).toBe(false);
+    fixture.detectChanges();
+    expect((element.querySelector('.send-button') as HTMLButtonElement).disabled).toBe(true);
+    app.sendMessage();
+    expect(api.send).not.toHaveBeenCalled();
+    // Simulate the service ending this spoken turn after a pause, without a click.
+    voice.listening.set(false);
+    completed?.();
+    fixture.detectChanges();
+    await fixture.whenStable();
     expect(api.send).toHaveBeenCalledExactlyOnceWith('माझ्याशी बोल', null, 'companion', 'mr');
     expect(voice.readReply).not.toHaveBeenCalled();
+    completed?.();
+    expect(api.send).toHaveBeenCalledOnce();
     response.next(answer);
     response.complete();
     fixture.detectChanges();
@@ -945,8 +965,31 @@ describe('DADUS chat', () => {
     expect(voice.startListening).toHaveBeenCalledOnce();
   });
 
+  it('submits only once when manually finishing Mic overlaps automatic completion', () => {
+    voice.stopListening.mockImplementation(() => {});
+    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    const [transcript, completed] = voice.startListening.mock.calls[0];
+    transcript('A complete spoken question');
+    fixture.detectChanges();
+    (element.querySelector('.mic-button') as HTMLButtonElement).click();
+    expect(voice.stopListening).toHaveBeenCalledOnce();
+    app.finishVoiceChat();
+    expect(voice.stopListening).toHaveBeenCalledOnce();
+    voice.listening.set(false);
+    completed?.();
+    completed?.();
+    expect(api.send).toHaveBeenCalledExactlyOnceWith(
+      'A complete spoken question',
+      null,
+      'companion',
+      'mr',
+    );
+    expect(voice.readReply).toHaveBeenCalledExactlyOnceWith(answer.message.content);
+    expect(voice.startListening).toHaveBeenCalledOnce();
+  });
+
   it.each(['recording', 'waiting'])(
-    'respects spoken-reply opt-out during ordinary Mic %s',
+    'respects spoken-reply opt-out during automatic Mic %s',
     async (phase) => {
       const response = new Subject<ChatResult>();
       api.send.mockReturnValue(response);
@@ -958,8 +1001,10 @@ describe('DADUS chat', () => {
         toggle.dispatchEvent(new Event('change'));
       };
       if (phase === 'recording') optOut();
-      (element.querySelector('.mic-button') as HTMLButtonElement).click();
-      await submit();
+      voice.listening.set(false);
+      voice.startListening.mock.calls[0][1]?.();
+      fixture.detectChanges();
+      await fixture.whenStable();
       if (phase === 'waiting') optOut();
       response.next(answer);
       response.complete();
@@ -973,13 +1018,13 @@ describe('DADUS chat', () => {
     },
   );
 
-  it('retains a failed ordinary Mic draft without reading the draft or the request error', async () => {
+  it('retains a failed automatic Mic draft without reading the draft or the request error', async () => {
     const response = new Subject<ChatResult>();
     api.send.mockReturnValue(response);
     (element.querySelector('.mic-button') as HTMLButtonElement).click();
     voice.startListening.mock.calls[0][0]('हे शब्द जप');
-    (element.querySelector('.mic-button') as HTMLButtonElement).click();
-    await submit();
+    voice.listening.set(false);
+    voice.startListening.mock.calls[0][1]?.();
     response.error(new HttpErrorResponse({ status: 0 }));
     fixture.detectChanges();
     await fixture.whenStable();
@@ -991,7 +1036,7 @@ describe('DADUS chat', () => {
 
   it('finishes a voice turn before sending all final words and automatically reads the reply', async () => {
     voice.stopListening.mockImplementation(() => {});
-    (element.querySelector('.start-voice-chat') as HTMLButtonElement).click();
+    (element.querySelector('.mic-button') as HTMLButtonElement).click();
     fixture.detectChanges();
     expect(voice.readReplies()).toBe(true);
     const [transcript, finished] = voice.startListening.mock.calls[0];
@@ -1027,11 +1072,9 @@ describe('DADUS chat', () => {
     expect(api.send).toHaveBeenCalledOnce();
   });
 
-  it('does not send an earlier typed draft when a voice turn captures no speech', async () => {
+  it('does not auto-send an earlier typed draft when the microphone captures no speech', async () => {
     await compose('Keep this typed thought');
-    voice.stopListening.mockImplementation(() => {});
     app.startVoiceChat();
-    app.finishVoiceChat();
     voice.listening.set(false);
     voice.startListening.mock.calls[0][1]?.();
     fixture.detectChanges();
@@ -1052,21 +1095,20 @@ describe('DADUS chat', () => {
     expect(app.voiceChatActive()).toBe(false);
   });
 
-  it('invalidates a pending voice send when language or conversation changes', () => {
+  it('invalidates automatic voice completion when language or conversation changes', () => {
     voice.stopListening.mockImplementation(() => {});
     app.startVoiceChat();
     const [transcript, finished] = voice.startListening.mock.calls[0];
     transcript('Unsent words');
-    app.finishVoiceChat();
     app.changeVoiceLanguage('hi-IN');
     finished?.();
     app.startVoiceChat();
-    const nextFinished = voice.startListening.mock.calls[1][1];
-    app.finishVoiceChat();
+    const [nextTranscript, nextFinished] = voice.startListening.mock.calls[1];
+    nextTranscript('More unsent words');
     app.newConversation();
     nextFinished?.();
     expect(api.send).not.toHaveBeenCalled();
-    expect(app.draft()).toBe('Unsent words');
+    expect(app.draft()).toBe('Unsent words More unsent words');
   });
 
   it('recovers from recognition failure without leaving voice chat stuck or sending a draft', async () => {
@@ -1079,15 +1121,15 @@ describe('DADUS chat', () => {
     expect(app.voiceChatActive()).toBe(false);
     expect(app.voiceChatFinishing()).toBe(false);
     expect(app.draft()).toBe('Captured before the error');
+    voice.startListening.mock.calls[0][1]?.();
     expect(api.send).not.toHaveBeenCalled();
-    expect(element.querySelector('.start-voice-chat')).not.toBeNull();
+    expect(element.querySelector('.mic-button')).not.toBeNull();
   });
 
   it('keeps an oversized voice draft for review instead of sending truncated speech', () => {
     voice.stopListening.mockImplementation(() => {});
     app.startVoiceChat();
     voice.startListening.mock.calls[0][0]('x'.repeat(4001));
-    app.finishVoiceChat();
     voice.listening.set(false);
     voice.startListening.mock.calls[0][1]?.();
     expect(api.send).not.toHaveBeenCalled();

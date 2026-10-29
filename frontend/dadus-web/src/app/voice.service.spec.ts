@@ -12,6 +12,8 @@ class FakeRecognition {
   continuous = true;
   interimResults = true;
   onstart: (() => void) | null = null;
+  onspeechstart: (() => void) | null = null;
+  onspeechend: (() => void) | null = null;
   onresult: ((event: FakeResultEvent) => void) | null = null;
   onerror: ((event: { error: string }) => void) | null = null;
   onend: (() => void) | null = null;
@@ -153,6 +155,252 @@ describe('VoiceService', () => {
     expect(received).toHaveBeenCalledExactlyOnceWith('कसा आहेस');
     expect(api.listening()).toBe(false);
     expect(api.status()).toContain('Review');
+  });
+
+  it('ends an automatic turn after a quiet pause and delivers the final words before completion', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    const oldEnd = active.onend;
+    active.result('माझ्याशी बोल');
+    vi.advanceTimersByTime(1799);
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(active.stop).toHaveBeenCalledOnce();
+    oldEnd?.();
+    oldEnd?.();
+    vi.advanceTimersByTime(5000);
+    expect(received).toHaveBeenCalledExactlyOnceWith('माझ्याशी बोल');
+    expect(finished).toHaveBeenCalledOnce();
+    expect(received.mock.invocationCallOrder[0]).toBeLessThan(finished.mock.invocationCallOrder[0]);
+    expect(api.listening()).toBe(false);
+    expect(FakeRecognition.instances).toHaveLength(1);
+  });
+
+  it('resets the quiet pause while tentative words and final results continue arriving', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('पहिले', false);
+    vi.advanceTimersByTime(1200);
+    active.result('पहिले वाक्य अजून बोलतोय', false);
+    vi.advanceTimersByTime(1200);
+    expect(active.stop).not.toHaveBeenCalled();
+    active.result('पहिले वाक्य पूर्ण झाले');
+    vi.advanceTimersByTime(1799);
+    expect(active.stop).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(active.stop).toHaveBeenCalledOnce();
+    active.onend?.();
+    expect(finished).toHaveBeenCalledOnce();
+  });
+
+  it('completes a confirmed automatic turn even when continuous Chrome never emits speechend', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.onspeechstart?.();
+    active.result('A complete question.');
+    vi.advanceTimersByTime(1800);
+    expect(active.stop).toHaveBeenCalledOnce();
+    active.onend?.();
+    expect(finished).toHaveBeenCalledOnce();
+    expect(api.listening()).toBe(false);
+  });
+
+  it('extends tentative active speech and uses a bounded idle fallback if speechend is missing', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.onspeechstart?.();
+    active.result('अजून', false);
+    vi.advanceTimersByTime(4000);
+    expect(active.stop).not.toHaveBeenCalled();
+    active.result('अजून बोलतोय', false);
+    vi.advanceTimersByTime(4999);
+    expect(active.stop).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(active.stop).toHaveBeenCalledOnce();
+    // stop() can make the recognizer finalize words that were tentative.
+    active.result('अजून बोलतोय आणि आता पूर्ण झाले');
+    active.onend?.();
+    expect(received).toHaveBeenCalledExactlyOnceWith('अजून बोलतोय आणि आता पूर्ण झाले');
+    expect(finished).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a pending quiet endpoint when new speech starts and rearms after speechend', () => {
+    const api = service();
+    api.startListening(vi.fn(), vi.fn(), { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('First part.');
+    vi.advanceTimersByTime(1000);
+    active.onspeechstart?.();
+    vi.advanceTimersByTime(2000);
+    expect(active.stop).not.toHaveBeenCalled();
+    active.onspeechend?.();
+    vi.advanceTimersByTime(1800);
+    expect(active.stop).toHaveBeenCalledOnce();
+  });
+
+  it('does not finish an automatic turn before any new speech has been captured', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.onspeechstart?.();
+    active.onspeechend?.();
+    vi.advanceTimersByTime(10000);
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.listening()).toBe(true);
+  });
+
+  it.each(['timeout', 'end'])(
+    'keeps tentative-only automatic speech for review on %s',
+    (ending) => {
+      const api = service();
+      const received = vi.fn();
+      const finished = vi.fn();
+      api.startListening(received, finished, { autoFinishAfterSilenceMs: 1800 });
+      const active = recognition();
+      active.result('not finalized', false);
+      vi.advanceTimersByTime(1800);
+      expect(active.stop).toHaveBeenCalledOnce();
+      if (ending === 'timeout') vi.advanceTimersByTime(1500);
+      else active.onend?.();
+      expect(received).not.toHaveBeenCalled();
+      expect(finished).not.toHaveBeenCalled();
+      expect(api.listening()).toBe(false);
+      expect(api.error()).toContain('could not confirm the last spoken words');
+    },
+  );
+
+  it('finishes a confirmed automatic question when the browser ends instead of reopening the mic', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('That is my question.');
+    active.onend?.();
+    vi.advanceTimersByTime(5000);
+    expect(finished).toHaveBeenCalledOnce();
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(FakeRecognition.instances).toHaveLength(1);
+    expect(api.listening()).toBe(false);
+  });
+
+  it('never submits a partial automatic question when the browser ends with tentative tail words', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    recognition().onresult?.({
+      resultIndex: 0,
+      results: [
+        { isFinal: true, length: 1, 0: { transcript: 'Confirmed beginning' } },
+        { isFinal: false, length: 1, 0: { transcript: 'unconfirmed ending' } },
+      ],
+    });
+    recognition().onend?.();
+    vi.advanceTimersByTime(5000);
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.error()).toContain('confirmed text is kept');
+    expect(FakeRecognition.instances).toHaveLength(1);
+  });
+
+  it('does not add silence-based completion to ordinary manual dictation', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished);
+    const active = recognition();
+    active.result('Review these words first.');
+    active.onspeechend?.();
+    vi.advanceTimersByTime(10000);
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.listening()).toBe(true);
+  });
+
+  it('clears quiet timers and retained callbacks before a new recording starts', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const old = recognition();
+    const oldSpeechEnd = old.onspeechend;
+    old.result('Cancelled question');
+    api.cancelListening();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    oldSpeechEnd?.();
+    vi.advanceTimersByTime(5000);
+    expect(old.stop).not.toHaveBeenCalled();
+    expect(recognition().stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+  });
+
+  it('clears automatic quiet completion after fatal recognition errors', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('Words before the error');
+    active.onerror?.({ error: 'network' });
+    vi.advanceTimersByTime(5000);
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.listening()).toBe(false);
+  });
+
+  it('allows a same-run final result to recover tentative words after no-speech', () => {
+    const api = service();
+    const received = vi.fn();
+    const finished = vi.fn();
+    api.startListening(received, finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('recoverable tentative words', false);
+    active.onerror?.({ error: 'no-speech' });
+    active.result('The complete recovered question.');
+    vi.advanceTimersByTime(1800);
+    expect(active.stop).toHaveBeenCalledOnce();
+    active.onend?.();
+    expect(received).toHaveBeenCalledExactlyOnceWith('The complete recovered question.');
+    expect(finished).toHaveBeenCalledOnce();
+    expect(api.error()).toBe('');
+  });
+
+  it.each(['language', 'destroy'])('clears pending automatic completion on %s', (action) => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    const active = recognition();
+    active.result('This recording is cancelled');
+    if (action === 'language') api.setLanguage('hi-IN');
+    else TestBed.resetTestingModule();
+    vi.advanceTimersByTime(5000);
+    expect(active.stop).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    expect(api.listening()).toBe(false);
+  });
+
+  it('resets speech activity after an empty browser run before quiet-completing the next run', () => {
+    const api = service();
+    const finished = vi.fn();
+    api.startListening(vi.fn(), finished, { autoFinishAfterSilenceMs: 1800 });
+    recognition().onspeechstart?.();
+    recognition().onend?.();
+    vi.advanceTimersByTime(250);
+    const next = recognition();
+    next.result('Now I have a question.');
+    vi.advanceTimersByTime(1800);
+    expect(next.stop).toHaveBeenCalledOnce();
+    next.onend?.();
+    expect(finished).toHaveBeenCalledOnce();
+    expect(FakeRecognition.instances).toHaveLength(2);
   });
 
   it('rejects callbacks from a cancelled microphone session after another session starts', () => {

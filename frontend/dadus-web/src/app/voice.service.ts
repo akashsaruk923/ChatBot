@@ -2,6 +2,10 @@ import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core'
 
 export type VoiceLanguage = 'mr-IN' | 'hi-IN' | 'en-IN';
 
+export interface ListeningOptions {
+  autoFinishAfterSilenceMs?: number;
+}
+
 interface RecognitionResult {
   readonly isFinal: boolean;
   readonly length: number;
@@ -21,6 +25,8 @@ interface BrowserRecognition {
   continuous: boolean;
   interimResults: boolean;
   onstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
   onresult: ((event: RecognitionEvent) => void) | null;
   onerror: ((event: { readonly error: string }) => void) | null;
   onend: (() => void) | null;
@@ -44,11 +50,14 @@ interface DictationSession {
   readonly version: number;
   readonly onFinalTranscript: (text: string) => void;
   readonly onFinished?: () => void;
+  readonly autoFinishAfterSilenceMs: number | null;
   receivedText: boolean;
   lostInterim: boolean;
   emptyEnds: number;
   stopping: boolean;
   userStopped: boolean;
+  automaticStop: boolean;
+  speechActive: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -71,6 +80,7 @@ export class VoiceService {
   private recognitionRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private recognitionSessionTimer: ReturnType<typeof setTimeout> | null = null;
   private recognitionStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private recognitionSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly voicesChanged = () => {
     if (this.destroyed) return;
     if (this.refreshVoices().length) {
@@ -153,7 +163,11 @@ export class VoiceService {
     this.error.set('');
   }
 
-  startListening(onFinalTranscript: (text: string) => void, onFinished?: () => void): void {
+  startListening(
+    onFinalTranscript: (text: string) => void,
+    onFinished?: () => void,
+    options: ListeningOptions = {},
+  ): void {
     if (this.destroyed || this.listening()) return;
     this.error.set('');
     this.status.set('');
@@ -169,11 +183,18 @@ export class VoiceService {
       version: ++this.recognitionVersion,
       onFinalTranscript,
       onFinished,
+      autoFinishAfterSilenceMs:
+        typeof options.autoFinishAfterSilenceMs === 'number' &&
+        Number.isFinite(options.autoFinishAfterSilenceMs)
+          ? Math.min(5000, Math.max(1000, options.autoFinishAfterSilenceMs))
+          : null,
       receivedText: false,
       lostInterim: false,
       emptyEnds: 0,
       stopping: false,
       userStopped: false,
+      automaticStop: false,
+      speechActive: false,
     };
     this.dictation = session;
     this.interimTranscript.set('');
@@ -198,6 +219,7 @@ export class VoiceService {
       return;
     }
     this.recognition = recognition;
+    session.speechActive = false;
     recognition.lang = this.language();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -207,10 +229,25 @@ export class VoiceService {
 
     recognition.onstart = () => {
       if (!current()) return;
-      this.status.set('Listening… Keep speaking, then press Stop when you are finished.');
+      this.status.set(
+        session.autoFinishAfterSilenceMs === null
+          ? 'Listening… Keep speaking, then press Stop when you are finished.'
+          : 'Listening… Pause after your question to send it automatically.',
+      );
+    };
+    recognition.onspeechstart = () => {
+      if (!current() || session.stopping) return;
+      session.speechActive = true;
+      this.clearRecognitionSilenceTimer();
+    };
+    recognition.onspeechend = () => {
+      if (!current()) return;
+      session.speechActive = false;
+      this.armRecognitionSilenceTimer(session);
     };
     recognition.onresult = (event) => {
       if (!current()) return;
+      const previousPreview = this.interimTranscript();
       const parts: string[] = [];
       for (let index = event.resultIndex; index < event.results.length; index++) {
         const result = event.results[index];
@@ -236,13 +273,16 @@ export class VoiceService {
       let preview = interim.join(' ').slice(0, 4000);
       if (/[\uD800-\uDBFF]$/.test(preview)) preview = preview.slice(0, -1);
       this.interimTranscript.set(preview);
+      if (parts.length || (preview.trim() && preview !== previousPreview))
+        this.armRecognitionSilenceTimer(session, parts.length > 0 && !preview.trim());
     };
     recognition.onerror = (event) => {
       if (!current()) return;
       // Chrome commonly reports no-speech before ending a quiet recognition run.
       // Its onend handler can restart this explicitly opened, bounded session.
       if (event.error === 'no-speech') {
-        if (this.interimTranscript().trim()) session.lostInterim = true;
+        // Keep tentative words available for a later same-run final result.
+        // Only onend can establish that a restart actually discarded them.
         this.status.set('Still listening… Speak when you are ready, or press Stop.');
         return;
       }
@@ -255,6 +295,18 @@ export class VoiceService {
       if (!current()) return;
       this.releaseRecognition(recognition);
       if (session.stopping) {
+        this.finishRecognition(session);
+        return;
+      }
+      // In an automatic turn, a browser endpoint is the end of the question.
+      // Reopening here would keep the mic active instead of allowing a reply.
+      if (
+        session.autoFinishAfterSilenceMs !== null &&
+        (session.receivedText || this.interimTranscript().trim())
+      ) {
+        session.stopping = true;
+        session.userStopped = true;
+        session.automaticStop = true;
         this.finishRecognition(session);
         return;
       }
@@ -292,10 +344,16 @@ export class VoiceService {
     if (this.dictation) this.requestRecognitionStop(this.dictation, true);
   }
 
-  private requestRecognitionStop(session: DictationSession, userStopped: boolean): void {
+  private requestRecognitionStop(
+    session: DictationSession,
+    userStopped: boolean,
+    automaticStop = false,
+  ): void {
     if (!this.isCurrentSession(session) || session.stopping) return;
     session.stopping = true;
     session.userStopped = userStopped;
+    session.automaticStop = automaticStop;
+    this.clearRecognitionSilenceTimer();
     if (this.recognitionSessionTimer !== null) clearTimeout(this.recognitionSessionTimer);
     this.recognitionSessionTimer = null;
     if (this.recognitionRestartTimer !== null) clearTimeout(this.recognitionRestartTimer);
@@ -340,6 +398,31 @@ export class VoiceService {
     );
   }
 
+  private armRecognitionSilenceTimer(session: DictationSession, confirmedEndpoint = false): void {
+    if (
+      !this.isCurrentSession(session) ||
+      session.stopping ||
+      session.autoFinishAfterSilenceMs === null ||
+      (!session.receivedText && !this.interimTranscript().trim())
+    )
+      return;
+    this.clearRecognitionSilenceTimer();
+    // Chrome can keep speechActive true until the whole continuous stream ends.
+    // A final result is still an endpoint; tentative activity gets a longer
+    // bounded idle allowance instead of keeping the microphone open forever.
+    const quietTime =
+      session.speechActive && !confirmedEndpoint ? 5000 : session.autoFinishAfterSilenceMs;
+    this.recognitionSilenceTimer = setTimeout(() => {
+      this.recognitionSilenceTimer = null;
+      this.requestRecognitionStop(session, true, true);
+    }, quietTime);
+  }
+
+  private clearRecognitionSilenceTimer(): void {
+    if (this.recognitionSilenceTimer !== null) clearTimeout(this.recognitionSilenceTimer);
+    this.recognitionSilenceTimer = null;
+  }
+
   private finishRecognition(session: DictationSession): void {
     if (!this.isCurrentSession(session)) return;
     const hasUnconfirmedTail =
@@ -365,10 +448,12 @@ export class VoiceService {
       this.error.set(
         'The browser could not confirm the last spoken words. Your confirmed text is kept; review your draft before sending.',
       );
-    } else if (session.userStopped) session.onFinished?.();
+    } else if (session.userStopped && (!session.automaticStop || session.receivedText))
+      session.onFinished?.();
   }
 
   private clearRecognitionTimers(): void {
+    this.clearRecognitionSilenceTimer();
     if (this.recognitionRestartTimer !== null) clearTimeout(this.recognitionRestartTimer);
     if (this.recognitionSessionTimer !== null) clearTimeout(this.recognitionSessionTimer);
     if (this.recognitionStopTimer !== null) clearTimeout(this.recognitionStopTimer);
@@ -439,6 +524,8 @@ export class VoiceService {
 
   private releaseRecognition(recognition: BrowserRecognition): void {
     recognition.onstart = null;
+    recognition.onspeechstart = null;
+    recognition.onspeechend = null;
     recognition.onresult = null;
     recognition.onerror = null;
     recognition.onend = null;

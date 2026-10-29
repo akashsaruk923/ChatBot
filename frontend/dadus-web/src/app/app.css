@@ -644,8 +644,7 @@ textarea::placeholder {
   margin: 0;
   padding: 5px 7px;
 }
-.test-voice,
-.start-voice-chat {
+.test-voice {
   border: 1px solid #424242;
   border-radius: 14px;
 }

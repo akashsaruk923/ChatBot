@@ -271,11 +271,11 @@
               type="button"
               [class.listening]="voice.listening()"
               [disabled]="
-                !voice.recognitionSupported || sending() || loadingHistory() || voiceChatActive()
+                !voice.recognitionSupported || sending() || loadingHistory() || voiceChatFinishing()
               "
               [attr.aria-pressed]="voice.listening()"
               aria-describedby="voice-help"
-              (click)="toggleDictation()"
+              (click)="toggleVoiceChat()"
             >
               <svg
                 aria-hidden="true"
@@ -287,7 +287,15 @@
                 <rect x="9" y="3" width="6" height="12" rx="3" />
                 <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3M8 21h8" />
               </svg>
-              {{ voice.listening() ? 'Stop dictation' : 'Mic · Speak' }}
+              {{
+                voiceChatActive()
+                  ? voiceChatFinishing()
+                    ? 'Finishing…'
+                    : 'Finish speaking'
+                  : voice.listening()
+                    ? 'Stop dictation'
+                    : 'Mic · Speak'
+              }}
             </button>
             <label class="voice-language" for="voice-language"
               ><span class="sr-only">Language</span
@@ -339,21 +347,17 @@
           <button class="stop-reading cancel-voice-chat" type="button" (click)="cancelVoiceChat()">
             Cancel voice chat
           </button>
-        } @else {
-          <button
-            class="read-reply start-voice-chat"
-            type="button"
-            [disabled]="
-              !voice.recognitionSupported ||
-              !voice.synthesisSupported ||
-              sending() ||
-              loadingHistory()
-            "
-            (click)="startVoiceChat()"
-          >
-            Voice chat
-          </button>
         }
+        <button
+          class="read-reply dictate-only"
+          type="button"
+          [disabled]="
+            !voice.recognitionSupported || sending() || loadingHistory() || voiceChatActive()
+          "
+          (click)="toggleDictation()"
+        >
+          {{ voice.listening() && !voiceChatActive() ? 'Stop dictation' : 'Dictate only' }}
+        </button>
         <label class="read-replies-toggle"
           ><input
             type="checkbox"
@@ -378,8 +382,8 @@
       <div class="voice-help" id="voice-help">
         <p id="language-help">{{ languageHelp() }}</p>
         <p>
-          Mic enables spoken replies: speak, review the draft, then Send. Voice chat uses Finish
-          &amp; send. Turn off Read replies aloud for text only.
+          Mic: speak, then pause for about 2 seconds. Your question is sent automatically and the
+          reply is read aloud. Dictate only keeps text in the draft for review.
         </p>
         @if (voice.interimTranscript()) {
           <p class="voice-status" aria-live="off">Hearing: {{ voice.interimTranscript() }}</p>
